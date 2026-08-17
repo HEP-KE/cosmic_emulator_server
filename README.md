@@ -4,7 +4,7 @@ Production MCP server exposing public cosmological emulators as agent tools:
 matter power spectra (6 cross-validating backends), modified gravity (f(R),
 nDGP, cubic Galileon), CMB Cls (2 backends), EFTofLSS galaxy multipoles,
 weak-lensing Cls, baryonic feedback (4 models), halo mass function, cluster
-gas modeling, and Lyman-alpha P1D — 16 tools over ~20 emulators, all CPU,
+gas modeling, and Lyman-alpha P1D — 21 tools over ~20 emulators, all CPU,
 millisecond-to-second evaluations.
 
 Companion documents:
@@ -20,7 +20,8 @@ Companion documents:
 bash scripts/setup_env.sh                 # creates conda env "cosmic-emu"
 conda activate cosmic-emu
 python tests/smoke_env.py                 # 18 emulator evaluations
-python -m pytest tests/ -q                # 15 tool integration tests
+python -m pytest tests/ -q                # 24 tool integration tests
+python tests/smoke_server.py              # every tool through a live MCP session
 python -m mcp_server                      # stdio transport
 python -m mcp_server --transport streamable-http --port 8000   # HTTP
 ```
@@ -37,12 +38,12 @@ or point any MCP client at the HTTP endpoint (`http://host:8000/mcp`).
 
 | Family | Tools | Backends |
 |---|---|---|
-| meta | list_emulators, describe_emulator | registry with ranges/units/citations |
-| pk | compute_linear_pk, compute_nonlinear_pk, plot_pk_comparison | camb, syren, baccoemu, euclidemu2, csst, gokunemu |
+| meta | list_emulators, describe_emulator, convert_cosmology, list_skills, load_skill | registry + cosmology-convention converter + skills |
+| pk | compute_linear_pk, compute_nonlinear_pk, compose_spectra, plot_pk_comparison | camb, syren, baccoemu, euclidemu2, csst, gokunemu |
 | gravity | compute_mg_boost, compute_mg_pk | e-MANTIS f(R), nDGPemu, CubicGalileonEmu |
 | cmb | compute_cmb_cls, plot_cmb_spectra | capse (l<=5000), cosmopower-jax |
 | lss | compute_galaxy_multipoles, compute_lensing_cls | PyBird one-loop EFT, jax-cosmo |
-| baryons | compute_baryon_suppression, emulate_subgrid_statistic | SP(k), bacco, syren-baryon x4 suites, subgrid_emu |
+| baryons | compute_baryon_suppression, baryonify_pk, emulate_subgrid_statistic | SP(k), bacco, syren-baryon x4 suites, subgrid_emu |
 | halos | compute_hmf, predict_cluster_gas_params | Mira-Titan HMF, picasso |
 | igm | emulate_lya_p1d | LaCE (DESI) |
 
@@ -82,8 +83,14 @@ vendored directly into an agent framework's own skills directory.
   return their std as a CSV column, not just the mean.
 - **Files, not arrays**: results flow between tools as CSV paths; only
   paths and summaries pass through the LLM context.
-- **Range validation**: pydantic field bounds mirror each emulator's
-  training box; out-of-range errors name the violated range.
+- **Range validation, two layers**: pydantic schemas take the union of
+  backend ranges (so backends stay comparable); every response then
+  reports `in_training_box` and per-backend extrapolation warnings.
+- **Numbers retrievable inline**: every compute tool takes
+  `return_data=true` (downsampled arrays in metadata) and always returns
+  quotable summary stats — for clients that cannot fetch the artifact URL.
+- **Server-side composition**: `compose_spectra` and `baryonify_pk` do the
+  arithmetic between outputs with provenance; clients never multiply CSVs.
 
 ## Hosting
 
@@ -93,7 +100,8 @@ The server is designed for a plain Linux box behind a reverse proxy:
 2. Run `python tests/smoke_env.py --all` once to pre-download the deferred
    emulators' model files (~GB total) before first request.
 3. Run under systemd with the HTTP transport bound to localhost and these
-   environment variables:
+   environment variables (also allow writes to the service HOME's `.cache`
+   — some libraries write runtime caches there):
    - `MCP_PUBLIC=1` — disable DNS-rebinding protection (only behind a
      proxy/auth)
    - `MCP_OUTPUT_ROOT=/srv/artifacts` — every tool `output_dir` is remapped
@@ -102,3 +110,6 @@ The server is designed for a plain Linux box behind a reverse proxy:
      browsable URLs for every file written
 4. Put a TLS reverse proxy (e.g. Caddy) in front: one route to the server
    port, one static file server on `MCP_OUTPUT_ROOT`.
+5. After every deploy, run `python tests/smoke_server.py <url>` — it calls
+   every tool through the served path (transport + sandbox + filesystem),
+   which catches failures the in-process tests cannot.

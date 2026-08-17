@@ -115,7 +115,7 @@ def compute_nonlinear_pk(
     w0: Annotated[float, Field(ge=-1.5, le=-0.5)] = -1.0,
     wa: Annotated[float, Field(ge=-0.7, le=0.5)] = 0.0,
     k_min: Annotated[float, Field(ge=1e-3)] = 0.01,
-    k_max: Annotated[float, Field(le=10.0)] = 5.0,
+    k_max: Annotated[float, Field(le=10.0, description="Backend k-limits: baccoemu 4.9, euclidemu2 9.4, csst/gokunemu 10; the default works everywhere.")] = 4.5,
     n_points: Annotated[int, Field(ge=10, le=2000)] = 300,
     z: Annotated[float, Field(ge=0.0, le=3.0)] = 0.0,
     return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
