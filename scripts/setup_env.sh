@@ -12,9 +12,13 @@ ENV_NAME="${1:-cosmic-emu}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXTERNAL="$REPO_DIR/external"
 
-conda create -n "$ENV_NAME" python=3.12 -y
-PIP="$(conda info --base)/envs/$ENV_NAME/bin/pip"
-PYTHON="$(conda info --base)/envs/$ENV_NAME/bin/python"
+# idempotent: safe to rerun after a partial failure
+if ! conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+    conda create -n "$ENV_NAME" python=3.12 -y
+fi
+ENV_PREFIX="$(conda info --base)/envs/$ENV_NAME"
+PIP="$ENV_PREFIX/bin/pip"
+PYTHON="$ENV_PREFIX/bin/python"
 
 $PIP install --upgrade pip
 # pkg_resources still needed by jax_cosmo and CubicGalileonEmu
@@ -37,10 +41,16 @@ $PIP install gokunemu
 # --- TensorFlow cluster --------------------------------------------------
 $PIP install py21cmemu
 
-# --- compiled: EuclidEmulator2 needs GSL; conda-forge GSL provides the
-#     libgsl.28.dylib/.so the PyPI wheel links against -------------------
-conda install -n "$ENV_NAME" -c conda-forge gsl -y
-$PIP install euclidemu2
+# --- compiled: EuclidEmulator2 needs GSL. On macOS the PyPI wheel links
+#     libgsl.28.dylib (conda-forge gsl provides it); on Linux there is no
+#     wheel and the sdist compiles against GSL found via pkg-config -------
+conda install -n "$ENV_NAME" -c conda-forge gsl pkg-config -y
+# the pkg-config BINARY must be on PATH for euclidemu2's setup.py probe
+PATH="$ENV_PREFIX/bin:$PATH" \
+    PKG_CONFIG_PATH="$ENV_PREFIX/lib/pkgconfig" \
+    CFLAGS="-I$ENV_PREFIX/include" LDFLAGS="-L$ENV_PREFIX/lib" \
+    $PIP install euclidemu2
+# (on Debian/Ubuntu, `apt install libgsl-dev pkg-config` also works)
 
 # --- classy_sz (emulated CLASS + tSZ; data downloads on first use) ------
 $PIP install classy_sz
