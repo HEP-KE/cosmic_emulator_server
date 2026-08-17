@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosmic-emulator-server"
+version = "0.1.0"
+description = "Production MCP server exposing cosmological emulators: P(k), modified gravity, CMB, LSS, baryons, halos, IGM."
+readme = "README.md"
+requires-python = ">=3.12"
+# Emulator dependencies are managed by scripts/setup_env.sh (several need
+# git installs, vendored patches, or install-order care) — see ENVIRONMENT.md.
+# Listed here are only the server's own direct needs.
+dependencies = [
+    "mcp[cli]>=1.27,<2",
+    "pydantic>=2,<3",
+    "numpy>=2",
+    "scipy",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.mcp-server]
+tool_modules = [
+    "tools.meta",
+    "tools.pk",
+    "tools.gravity",
+    "tools.cmb",
+    "tools.lss",
+    "tools.baryons",
+    "tools.halos",
+    "tools.igm",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_server*", "tools*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
