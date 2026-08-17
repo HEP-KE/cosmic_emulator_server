@@ -14,8 +14,12 @@ from typing import Annotated, Literal
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, T_CMB_UK, get_cached, quiet,
-                      resolve_outdir, write_csv)
+from ..common import (ArtifactResult, T_CMB_UK, downsample_columns,
+                      get_cached, param_slug, quiet, resolve_outdir,
+                      summary_stats, varied_label, write_csv)
+
+_CMB_DEFAULTS = {"omega_b": 0.022, "omega_cdm": 0.12, "h": 0.67,
+                 "tau": 0.055, "ns": 0.965, "ln10As": 3.045}
 
 __all__ = ["compute_cmb_cls", "plot_cmb_spectra"]
 
@@ -71,6 +75,7 @@ def compute_cmb_cls(
     ns: Annotated[float, Field(ge=0.92, le=1.01)] = 0.965,
     ln10As: Annotated[float, Field(ge=2.7, le=3.3, description="ln(10^10 As)")] = 3.045,
     ell_max: Annotated[int, Field(ge=100, le=5000)] = 2500,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute a CMB angular power spectrum Dl = l(l+1)Cl/2pi in muK^2.
 
@@ -87,18 +92,26 @@ def compute_cmb_cls(
     keep = ell <= ell_max
     ell, dl = ell[keep], dl[keep]
 
-    label = f"{spectrum} {backend}"
+    label = varied_label(f"{spectrum} {backend}", params, _CMB_DEFAULTS)
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"cmb_{spectrum.lower()}_{backend}.csv"
+    slug = param_slug(dict(params, spectrum=spectrum, backend=backend))
+    path = outdir / f"cmb_{spectrum.lower()}_{backend}_{slug}.csv"
     unit = "muK^2 (Dl)" if spectrum != "PP" else "Capse native convention"
-    write_csv(path, {"ell": ell, "Dl_muK2": dl},
-              [f"label: {label}", f"spectrum: {spectrum}",
-               f"backend: {backend}", f"unit: {unit}", f"params: {params}"])
+    columns = {"ell": ell, "Dl_muK2": dl}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: cl",
+               f"units: ell [multipole], Dl [{unit}]",
+               f"spectrum: {spectrum}", f"backend: {backend}",
+               f"params: {params}"])
+    metadata = {"spectrum": spectrum, "backend": backend, "params": params,
+                "unit": unit, "ell_range": [int(ell[0]), int(ell[-1])],
+                "stats": summary_stats(ell, dl, "ell", "Dl")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Computed {spectrum} D_l with {backend} for l = 2..{int(ell[-1])}.",
-        metadata={"spectrum": spectrum, "backend": backend, "params": params,
-                  "unit": unit, "ell_range": [int(ell[0]), int(ell[-1])]},
+        metadata=metadata,
     )
 
 
@@ -130,7 +143,7 @@ def plot_cmb_spectra(
     ax.set_title("CMB angular power spectra")
     ax.legend(fontsize="small")
     outdir = resolve_outdir(output_dir)
-    path = outdir / "cmb_spectra.png"
+    path = outdir / f"cmb_spectra_{param_slug({'f': tuple(spectrum_files)})}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return ArtifactResult(

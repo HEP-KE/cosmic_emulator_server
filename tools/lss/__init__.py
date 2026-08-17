@@ -6,8 +6,9 @@ from typing import Annotated
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, get_cached, quiet, read_csv,
-                      resolve_outdir, write_csv)
+from ..common import (ArtifactResult, downsample_columns, get_cached,
+                      param_slug, quiet, read_csv, resolve_outdir,
+                      summary_stats, write_csv)
 
 __all__ = ["compute_galaxy_multipoles", "compute_lensing_cls"]
 
@@ -25,6 +26,7 @@ def compute_galaxy_multipoles(
     b4: Annotated[float, Field(ge=-4.0, le=4.0)] = 0.8,
     k_max: Annotated[float, Field(ge=0.1, le=0.3)] = 0.25,
     number_density: Annotated[float, Field(gt=0, le=0.01, description="Galaxy number density in (h/Mpc)^3, sets stochastic-term normalization")] = 3e-4,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute one-loop EFTofLSS galaxy power spectrum multipoles P0/P2/P4 with PyBird.
 
@@ -70,19 +72,28 @@ def compute_galaxy_multipoles(
     keep = k_out <= k_max
     label = f"EFTofLSS multipoles b1={b1} z={z:g}"
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"galaxy_multipoles_z{z:g}.csv"
-    write_csv(path, {"k_h_per_Mpc": k_out[keep], "P0": ps[0][keep],
-                     "P2": ps[1][keep], "P4": ps[2][keep]},
-              [f"label: {label}", f"z: {z:g}", f"f: {f:.4f}",
+    slug = param_slug({"z": z, "b1": b1, "b2": b2, "b3": b3, "b4": b4,
+                       "f": round(f, 4), "in": linear_pk_file})
+    path = outdir / f"galaxy_multipoles_z{z:g}_{slug}.csv"
+    columns = {"k_h_per_Mpc": k_out[keep], "P0": ps[0][keep],
+               "P2": ps[1][keep], "P4": ps[2][keep]}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: multipoles",
+               "units: k [h/Mpc], P_l [(Mpc/h)^3]",
+               f"z: {z:g}", f"f: {f:.4f}",
                f"bias: b1={b1},b2={b2},b3={b3},b4={b4}",
                f"input: {linear_pk_file}"])
+    metadata = {"z": z, "growth_rate_f": round(f, 4), "bias": bias,
+                "units": {"k": "h/Mpc", "Pl": "(Mpc/h)^3"},
+                "note": "one-loop EFT with default counterterms",
+                "stats": summary_stats(k_out[keep], ps[0][keep], "k", "P0")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Computed P0/P2/P4 to k={k_max} h/Mpc at z={z:g} "
                 f"(f={f:.3f}, b1={b1}).",
-        metadata={"z": z, "growth_rate_f": round(f, 4), "bias": bias,
-                  "units": {"k": "h/Mpc", "Pl": "(Mpc/h)^3"},
-                  "note": "one-loop EFT with default counterterms"},
+        metadata=metadata,
     )
 
 
@@ -99,6 +110,7 @@ def compute_lensing_cls(
     ell_min: Annotated[int, Field(ge=2)] = 10,
     ell_max: Annotated[int, Field(le=5000)] = 3000,
     n_ell: Annotated[int, Field(ge=5, le=200)] = 50,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute weak-lensing convergence angular power spectrum with jax-cosmo.
 
@@ -121,13 +133,21 @@ def compute_lensing_cls(
 
     label = f"WL kappa Cl (z_s~{z_source:g}, sigma8={sigma8})"
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"lensing_cls_zs{z_source:g}.csv"
-    write_csv(path, {"ell": ell, "Cl_kappa": cl},
-              [f"label: {label}", f"params: Om={Om},sigma8={sigma8},w0={w0}"])
+    slug = param_slug({"Om": Om, "sigma8": sigma8, "w0": w0, "zs": z_source})
+    path = outdir / f"lensing_cls_zs{z_source:g}_{slug}.csv"
+    columns = {"ell": ell, "Cl_kappa": cl}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: cl",
+               "units: ell [multipole], Cl [dimensionless]",
+               f"params: Om={Om},sigma8={sigma8},w0={w0}"])
+    metadata = {"z_source": z_source, "units": {"Cl": "dimensionless"},
+                "approximation": "Limber, single Smail source bin",
+                "stats": summary_stats(ell, cl, "ell", "Cl")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Computed lensing Cl for {len(ell)} multipoles "
                 f"l = {int(ell[0])}..{int(ell[-1])}.",
-        metadata={"z_source": z_source, "units": {"Cl": "dimensionless"},
-                  "approximation": "Limber, single Smail source bin"},
+        metadata=metadata,
     )

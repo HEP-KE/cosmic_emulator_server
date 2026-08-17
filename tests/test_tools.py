@@ -182,5 +182,85 @@ def test_lya_p1d():
     assert cols["P1D_Mpc"][0] > cols["P1D_Mpc"][-1]  # decreasing with k
 
 
+# ---------------- feedback-driven behaviors (Aug 17 review) ----------------
+
+def test_return_data_inline():
+    r = _ok(pk.compute_nonlinear_pk(output_dir=OUT, backend="syren_halofit",
+                                    n_points=500, return_data=True))
+    data = r.metadata["data"]
+    assert len(data["k_h_per_Mpc"]) <= 80
+    assert len(data["k_h_per_Mpc"]) == len(data["Pk_Mpc_over_h_cubed"])
+    assert "stats" in r.metadata and "max_Pk" in r.metadata["stats"]
+
+
+def test_in_training_box_flag():
+    r = _ok(pk.compute_nonlinear_pk(output_dir=OUT, backend="gokunemu"))
+    assert r.metadata["in_training_box"] is True
+    # Ob=0.06 is inside the union schema but OUTSIDE gokunemu's box (<=0.055)
+    r = _ok(pk.compute_nonlinear_pk(output_dir=OUT, backend="gokunemu", Ob=0.06))
+    assert r.metadata["in_training_box"] is False
+    assert any("Ob" in w for w in r.metadata["extrapolation_warnings"])
+    assert "WARNING" in r.message
+
+
+def test_plot_refuses_mixed_quantities():
+    pk_file = pk.compute_nonlinear_pk(output_dir=OUT, backend="syren_halofit").files[0]
+    sup_file = baryons.compute_baryon_suppression(output_dir=OUT, model="spk").files[0]
+    with pytest.raises(ValueError, match="different quantities"):
+        pk.plot_pk_comparison(spectrum_files=[pk_file, sup_file], output_dir=OUT)
+    _ok(pk.plot_pk_comparison(spectrum_files=[pk_file, sup_file], output_dir=OUT,
+                              allow_mixed_quantities=True))
+
+
+def test_compose_spectra():
+    pk_file = pk.compute_nonlinear_pk(output_dir=OUT, backend="syren_halofit",
+                                      k_min=0.1, k_max=8.0).files[0]
+    sup_file = baryons.compute_baryon_suppression(output_dir=OUT, model="spk").files[0]
+    r = _ok(pk.compose_spectra(spectrum_files=[pk_file, sup_file],
+                               output_dir=OUT, op="multiply", return_data=True))
+    _, cols = read_csv(r.files[0])
+    _, pk_cols = read_csv(pk_file)
+    assert np.all(cols["value"] <= np.interp(cols["k_h_per_Mpc"],
+                                             pk_cols["k_h_per_Mpc"],
+                                             pk_cols["Pk_Mpc_over_h_cubed"]) + 1e-6)
+
+
+def test_baryonify_pk():
+    pk_file = pk.compute_nonlinear_pk(output_dir=OUT, backend="baccoemu",
+                                      k_min=0.1, k_max=4.5).files[0]
+    r = _ok(baryons.baryonify_pk(pk_file=pk_file, output_dir=OUT, model="spk"))
+    _, cols = read_csv(r.files[0])
+    assert np.all(cols["suppression"] <= 1.001)
+    assert "suppression_stats" in r.metadata
+
+
+def test_labels_and_filenames_vary():
+    r1 = _ok(halos.compute_hmf(output_dir=OUT, sigma_8=0.8))
+    r2 = _ok(halos.compute_hmf(output_dir=OUT, sigma_8=0.75))
+    assert r1.files[0] != r2.files[0], "parameter scans must not overwrite"
+    h2, _ = read_csv(r2.files[0])
+    assert "sigma_8=0.75" in h2["label"]
+
+
+def test_hmf_reproducible():
+    r1 = halos.compute_hmf(output_dir=OUT, random_seed=7)
+    r2 = halos.compute_hmf(output_dir=OUT, random_seed=7)
+    _, c1 = read_csv(r1.files[0])
+    _, c2 = read_csv(r2.files[0])
+    assert np.array_equal(c1["emulator_std"], c2["emulator_std"])
+
+
+def test_convert_cosmology():
+    r = _ok(meta.convert_cosmology(sigma8=0.81))
+    conv = r.metadata["conversions"]
+    assert abs(conv["hmf_miratitan"]["Ommh2"] - 0.31 * 0.67**2) < 1e-4
+    assert 2.7 < conv["cmb"]["ln10As"] < 3.3
+    # round-trip: feed the derived As back, sigma8 must come back
+    r2 = _ok(meta.convert_cosmology(As=conv["pk_and_lensing"]["As"]))
+    assert abs(r2.metadata["conversions"]["pk_and_lensing"]["sigma8"] - 0.81) < 0.01
+    r3 = _ok(meta.convert_cosmology(sigma8=0.81, w0=-0.9))
+    assert any("CANNOT" in n for n in r3.metadata["notes"])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-x", "-q"]))

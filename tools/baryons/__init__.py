@@ -5,10 +5,15 @@ from typing import Annotated, Literal
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, get_cached, k_grid, quiet,
-                      resolve_outdir, write_csv)
+import re
+from pathlib import Path
 
-__all__ = ["compute_baryon_suppression", "emulate_subgrid_statistic"]
+from ..common import (ArtifactResult, downsample_columns, get_cached, k_grid,
+                      param_slug, quiet, read_csv, resolve_outdir,
+                      summary_stats, write_csv)
+
+__all__ = ["compute_baryon_suppression", "baryonify_pk",
+           "emulate_subgrid_statistic"]
 
 SuppressionModel = Literal["spk", "bacco", "syren_IllustrisTNG",
                            "syren_Astrid", "syren_SIMBA", "syren_Swift_EAGLE"]
@@ -56,6 +61,7 @@ def compute_baryon_suppression(
     k_max: Annotated[float, Field(le=12.0)] = 8.0,
     n_points: Annotated[int, Field(ge=10, le=1000)] = 200,
     z: Annotated[float, Field(ge=0.0, le=3.0)] = 0.0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute the baryonic suppression S(k) = P_hydro(k) / P_gravity-only(k).
 
@@ -69,8 +75,14 @@ def compute_baryon_suppression(
       (IllustrisTNG / Astrid / SIMBA / Swift_EAGLE) driven by A_SN1/2,
       A_AGN1/2 — good for quantifying inter-suite systematic spread.
 
-    S(k) is dimensionless (=1 means no baryonic effect); multiply into any
-    gravity-only nonlinear P(k). Output CSV: k [h/Mpc], suppression.
+    S(k) is dimensionless (=1 means no baryonic effect); apply it to a
+    gravity-only nonlinear P(k) with baryonify_pk (or compose_spectra) —
+    do not multiply client-side. NOTE on redshift scans with "spk": the
+    fb_a/fb_pow inputs are z-INDEPENDENT here, so scanning z at fixed
+    defaults holds the baryon-fraction relation fixed while the halo
+    population evolves — the resulting S(k,z) trend is an artifact of that
+    choice, not a physical prediction. Supply z-appropriate fb parameters
+    per call for physical z-evolution. Output CSV: k [h/Mpc], suppression.
     """
     k = k_grid(k_min, k_max, n_points)
 
@@ -102,18 +114,113 @@ def compute_baryon_suppression(
         sup = fn(k, Om, sigma8, A_SN1, A_SN2, A_AGN1, A_AGN2, 1.0 / (1.0 + z))
         detail = f"{suite}: A_SN=({A_SN1},{A_SN2}), A_AGN=({A_AGN1},{A_AGN2})"
 
-    label = f"baryon suppression {model} z={z:g}"
+    label = f"baryon suppression {model} ({detail}) z={z:g}"
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"baryon_suppression_{model}_z{z:g}.csv"
-    write_csv(path, {"k_h_per_Mpc": k, "suppression": sup},
-              [f"label: {label}", f"model: {model}", f"z: {z:g}",
-               f"detail: {detail}"])
+    slug = param_slug({"model": model, "detail": detail, "z": z,
+                       "k0": k_min, "k1": k_max})
+    path = outdir / f"baryon_suppression_{model}_z{z:g}_{slug}.csv"
+    columns = {"k_h_per_Mpc": k, "suppression": sup}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: suppression",
+               "units: k [h/Mpc], suppression [dimensionless]",
+               f"model: {model}", f"z: {z:g}", f"detail: {detail}"])
+    metadata = {"model": model, "detail": detail, "z": z,
+                "units": {"k": "h/Mpc", "suppression": "dimensionless"},
+                "stats": summary_stats(k, sup, "k", "S")}
+    if model == "spk":
+        metadata["z_scan_note"] = ("fb parameters are z-independent inputs; "
+                                   "a z-scan at fixed fb is not a physical "
+                                   "evolution prediction")
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Computed S(k) with {model} at z={z:g}: max suppression "
                 f"{float(np.nanmin(sup)):.3f} at k={k[np.nanargmin(sup)]:.2f} h/Mpc.",
-        metadata={"model": model, "detail": detail, "z": z,
-                  "units": {"k": "h/Mpc", "suppression": "dimensionless"}},
+        metadata=metadata,
+    )
+
+
+@validate_call
+def baryonify_pk(
+    pk_file: Annotated[str, Field(min_length=1, description="Gravity-only nonlinear P(k) CSV from compute_nonlinear_pk (or compute_mg_pk).")],
+    output_dir: Annotated[str, Field(min_length=1)],
+    model: SuppressionModel = "spk",
+    fb_a: Annotated[float, Field(ge=0.1, le=1.0)] = 0.4,
+    fb_pow: Annotated[float, Field(ge=-0.5, le=1.0)] = 0.3,
+    fb_pivot_log10Msun: Annotated[float, Field(ge=12.0, le=15.0)] = 13.5,
+    SO: Literal[200, 500] = 200,
+    log10_M_c: Annotated[float, Field(ge=9.0, le=15.0)] = 14.0,
+    log10_eta: Annotated[float, Field(ge=-0.7, le=0.7)] = -0.3,
+    log10_beta: Annotated[float, Field(ge=-1.0, le=0.7)] = -0.22,
+    log10_M1_z0_cen: Annotated[float, Field(ge=9.0, le=13.0)] = 10.5,
+    log10_theta_out: Annotated[float, Field(ge=0.0, le=0.5)] = 0.25,
+    log10_theta_inn: Annotated[float, Field(ge=-2.0, le=-0.5)] = -0.86,
+    log10_M_inn: Annotated[float, Field(ge=9.0, le=13.5)] = 13.4,
+    A_SN1: Annotated[float, Field(ge=0.25, le=4.0)] = 1.0,
+    A_SN2: Annotated[float, Field(ge=0.5, le=2.0)] = 1.0,
+    A_AGN1: Annotated[float, Field(ge=0.25, le=4.0)] = 1.0,
+    A_AGN2: Annotated[float, Field(ge=0.5, le=2.0)] = 1.0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
+) -> ArtifactResult:
+    """Apply baryonic suppression to a gravity-only P(k) file, server-side.
+
+    Mirrors compute_mg_pk for baryons: reads the P(k) CSV, evaluates the
+    chosen suppression model on the SAME k-grid and redshift (z is read
+    from the input file header — no mismatch possible), and writes the
+    baryonified spectrum with full provenance. This answers questions like
+    "f(R) universe with feedback": feed it the output of compute_mg_pk.
+    Parameter groups per model are as in compute_baryon_suppression.
+    """
+    header, cols = read_csv(pk_file)
+    names = list(cols.keys())
+    k = cols[names[0]]
+    pk = cols[names[1]]
+    if header.get("quantity") not in (None, "power_spectrum"):
+        raise ValueError(f"{pk_file} has quantity="
+                         f"{header.get('quantity')!r}; expected a power_spectrum file.")
+    z_match = re.search(r"([\d.]+)", header.get("z", ""))
+    z = float(z_match.group(1)) if z_match else 0.0
+
+    sup_result = compute_baryon_suppression(
+        output_dir=output_dir, model=model, fb_a=fb_a, fb_pow=fb_pow,
+        fb_pivot_log10Msun=fb_pivot_log10Msun, SO=SO,
+        log10_M_c=log10_M_c, log10_eta=log10_eta, log10_beta=log10_beta,
+        log10_M1_z0_cen=log10_M1_z0_cen, log10_theta_out=log10_theta_out,
+        log10_theta_inn=log10_theta_inn, log10_M_inn=log10_M_inn,
+        A_SN1=A_SN1, A_SN2=A_SN2, A_AGN1=A_AGN1, A_AGN2=A_AGN2,
+        k_min=float(max(k[0], 0.02)), k_max=float(min(k[-1], 12.0)),
+        n_points=min(len(k), 500), z=min(z, 3.0))
+    _, sup_cols = read_csv(sup_result.files[0])
+    sup = np.interp(k, sup_cols["k_h_per_Mpc"], sup_cols["suppression"],
+                    left=1.0, right=np.nan)
+    pk_baryon = pk * sup
+    keep = np.isfinite(pk_baryon)
+
+    base_label = header.get("label", Path(pk_file).stem)
+    label = f"{base_label} x {model} baryons"
+    outdir = resolve_outdir(output_dir)
+    slug = param_slug({"in": pk_file, "model": model, "z": z})
+    path = outdir / f"pk_baryonified_{model}_z{z:g}_{slug}.csv"
+    columns = {"k_h_per_Mpc": k[keep], "Pk_Mpc_over_h_cubed": pk_baryon[keep],
+               "suppression": sup[keep]}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: power_spectrum",
+               "variant: nonlinear_baryonified",
+               "units: k [h/Mpc], Pk [(Mpc/h)^3]",
+               f"model: {model}", f"z: {z:g}", f"input: {pk_file}"])
+    metadata = {"model": model, "z": z, "input_file": pk_file,
+                "input_label": base_label,
+                "units": {"k": "h/Mpc", "Pk": "(Mpc/h)^3"},
+                "stats": summary_stats(k[keep], pk_baryon[keep], "k", "Pk"),
+                "suppression_stats": summary_stats(k[keep], sup[keep], "k", "S")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
+    return ArtifactResult(
+        status="success", files=[str(path), sup_result.files[0]],
+        message=f"Baryonified {base_label} with {model}: max suppression "
+                f"{float(np.nanmin(sup[keep])):.3f}.",
+        metadata=metadata,
     )
 
 
@@ -127,6 +234,7 @@ def emulate_subgrid_statistic(
     v_kin: Annotated[float, Field(ge=0.1, le=1.2, description="AGN kinetic wind velocity in 1e4 km/s")] = 0.6,
     e_kin: Annotated[float, Field(ge=0.02, le=1.2, description="AGN kinetic feedback efficiency x10")] = 0.6,
     z_index: Annotated[int, Field(ge=0, le=3, description="Snapshot index (0 = z~0)")] = 0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Emulate a CRK-HACC hydro-simulation summary statistic vs subgrid parameters.
 
@@ -161,20 +269,29 @@ def emulate_subgrid_statistic(
     else:
         x_name = str(grid_info.get("x_name", "x"))
 
-    label = f"subgrid {statistic} ({SUBGRID_STATS[statistic]})"
+    label = (f"subgrid {statistic} [kappa_w={kappa_w}, e_w={e_w}, "
+             f"M_seed={M_seed}, v_kin={v_kin}, e_kin={e_kin}]")
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"subgrid_{statistic}_z{z_index}.csv"
-    write_csv(path, {x_name: x, "mean": mean, "gp_std": std},
-              [f"label: {label}", f"statistic: {statistic}",
-               f"z_index: {z_index}",
+    slug = param_slug({"stat": statistic, "z": z_index, "kw": kappa_w,
+                       "ew": e_w, "ms": M_seed, "vk": v_kin, "ek": e_kin})
+    path = outdir / f"subgrid_{statistic}_z{z_index}_{slug}.csv"
+    columns = {x_name: x, "mean": mean, "gp_std": std}
+    write_csv(path, columns,
+              [f"label: {label}", f"quantity: subgrid_{statistic}",
+               f"units: {x_name}, statistic-native",
+               f"statistic: {statistic}", f"z_index: {z_index}",
                f"params: kappa_w={kappa_w},e_w={e_w},M_seed={M_seed},"
                f"v_kin={v_kin},e_kin={e_kin}"])
+    metadata = {"statistic": statistic, "z_index": z_index,
+                "params": {"kappa_w": kappa_w, "e_w": e_w, "M_seed": M_seed,
+                           "v_kin": v_kin, "e_kin": e_kin},
+                "note": "gp_std column is the emulator 1-sigma uncertainty",
+                "stats": summary_stats(x, mean, x_name, "mean")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Emulated {SUBGRID_STATS[statistic]} ({len(mean)} points) "
                 "with GP uncertainty.",
-        metadata={"statistic": statistic, "z_index": z_index,
-                  "params": {"kappa_w": kappa_w, "e_w": e_w, "M_seed": M_seed,
-                             "v_kin": v_kin, "e_kin": e_kin},
-                  "note": "gp_std column is the emulator 1-sigma uncertainty"},
+        metadata=metadata,
     )

@@ -11,6 +11,66 @@ import numpy as np
 from ..common import get_cached, quiet
 
 
+def _goku_box():
+    """GokuNEmu training bounds, read from the file shipped in the package."""
+    import os
+    import gokunemu
+    limits = np.loadtxt(os.path.join(os.path.dirname(gokunemu.__file__),
+                                     "input_limits-W.txt"))
+    names = ["Om", "Ob", "h", "As", "ns", "w0", "wa", "mnu", "Neff", "alphas"]
+    return {n: [float(lo), float(hi)] for n, (lo, hi) in zip(names, limits)}
+
+
+# Canonical-parameter training boxes per backend (None = no hard box).
+# Sources: emulator docs/papers, verified in EMULATOR_CATALOG.md; gokunemu's
+# is read from its own limits file at first use.
+TRAINING_BOXES: dict[str, dict | None] = {
+    "camb": None,
+    "camb_hmcode": None,
+    "syren": {"Om": [0.2, 0.45], "Ob": [0.03, 0.07], "h": [0.55, 0.85],
+              "ns": [0.85, 1.05], "sigma8": [0.6, 1.0], "z": [0.0, 3.0]},
+    "syren_halofit": {"Om": [0.2, 0.45], "Ob": [0.03, 0.07], "h": [0.55, 0.85],
+                      "ns": [0.85, 1.05], "sigma8": [0.6, 1.0], "z": [0.0, 3.0]},
+    "baccoemu": {"Om": [0.23, 0.40], "Ob": [0.04, 0.06], "h": [0.6, 0.8],
+                 "ns": [0.92, 1.01], "sigma8": [0.73, 0.90], "mnu": [0.0, 0.4],
+                 "w0": [-1.15, -0.85], "wa": [-0.3, 0.3], "z": [0.0, 1.5]},
+    "euclidemu2": {"Om": [0.24, 0.40], "Ob": [0.04, 0.06], "h": [0.61, 0.73],
+                   "ns": [0.92, 1.00], "As": [1.7e-9, 2.5e-9],
+                   "w0": [-1.3, -0.7], "wa": [-0.7, 0.5], "mnu": [0.0, 0.15],
+                   "z": [0.0, 3.0]},
+    "csst": {"Om": [0.24, 0.40], "Ob": [0.04, 0.06], "h": [0.6, 0.8],
+             "ns": [0.92, 1.00], "As": [1.7e-9, 2.5e-9], "w0": [-1.3, -0.7],
+             "wa": [-0.5, 0.5], "mnu": [0.0, 0.3], "z": [0.0, 3.0]},
+    "gokunemu": "FROM_PACKAGE",  # resolved lazily via _goku_box()
+}
+
+
+def check_box(backend: str, params: dict, z: float) -> tuple[bool, list[str]]:
+    """Compare parameters against the backend's training box.
+
+    Returns (in_training_box, warnings). Schema-level validation stays a
+    union across backends so multi-backend comparisons remain expressible;
+    this per-backend check makes extrapolation VISIBLE in every response
+    instead of silent (NN backends do not guard themselves).
+    """
+    box = TRAINING_BOXES.get(backend)
+    if box == "FROM_PACKAGE":
+        box = get_cached("goku_box", _goku_box)
+    if not box:
+        return True, []
+    values = dict(params, z=z)
+    warnings = []
+    for name, (lo, hi) in box.items():
+        v = values.get(name)
+        if v is None:
+            continue
+        if not (lo <= v <= hi):
+            warnings.append(
+                f"{backend}: {name}={v:g} outside training box [{lo:g}, {hi:g}]"
+                " — output is an extrapolation")
+    return not warnings, warnings
+
+
 def _camb_results(params: dict, z: float, kmax: float, nonlinear: bool):
     import camb
     kwargs = dict(

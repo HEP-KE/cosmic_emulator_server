@@ -10,9 +10,32 @@ from typing import Annotated, Literal
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, get_cached, k_grid, quiet,
-                      resolve_outdir, write_csv)
+from ..common import (ArtifactResult, downsample_columns, get_cached, k_grid,
+                      param_slug, quiet, resolve_outdir, summary_stats,
+                      write_csv)
 from ..pk import backends as pk_backends
+
+# Per-model training boxes (cosmology side; the MG parameter itself is
+# already exactly bounded in the tool schema). The schema's shared bounds
+# are the union; these are the per-model truths.
+MG_BOXES = {
+    "fofr": {"Om": [0.2365, 0.3941], "sigma8": [0.6, 1.0], "z": [0.0, 2.0]},
+    "ndgp": {"Om": [0.28, 0.36], "Ob": [0.04, 0.06], "ns": [0.92, 1.0],
+             "As": [1.7e-9, 2.5e-9], "h": [0.61, 0.73], "z": [0.0, 2.0]},
+    "cubic_galileon": {"Om": [0.275, 0.331], "ns": [0.85, 1.1],
+                       "As": [1.453e-9, 3.291e-9], "h": [0.61, 0.73],
+                       "z": [0.0, 49.0]},
+}
+
+
+def _check_mg_box(model: str, values: dict) -> tuple[bool, list[str]]:
+    warnings = []
+    for name, (lo, hi) in MG_BOXES[model].items():
+        v = values.get(name)
+        if v is not None and not (lo <= v <= hi):
+            warnings.append(f"{model}: {name}={v:g} outside training box "
+                            f"[{lo:g}, {hi:g}] — output is an extrapolation")
+    return not warnings, warnings
 
 __all__ = ["compute_mg_boost", "compute_mg_pk"]
 
@@ -88,6 +111,7 @@ def compute_mg_boost(
     k_max: Annotated[float, Field(le=12.0)] = 5.0,
     n_points: Annotated[int, Field(ge=10, le=1000)] = 200,
     z: Annotated[float, Field(ge=0.0, le=2.0)] = 0.0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute a modified-gravity power spectrum boost B(k) = P_MG / P_LCDM.
 
@@ -109,25 +133,33 @@ def compute_mg_boost(
     mg_par = {"fofr": f"-log10|fR0|={minus_log10_fR0}",
               "ndgp": f"H0rc={H0rc}",
               "cubic_galileon": f"f_phi={f_phi}"}[model]
+    in_box, box_warnings = _check_mg_box(model, dict(kwargs, z=z))
     label = f"{model} boost ({mg_par}) z={z:g}"
     columns = {"k_h_per_Mpc": k, "boost": boost}
     if "gp_std" in extra:
         columns["gp_std"] = extra["gp_std"]
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"mg_boost_{model}_z{z:g}.csv"
-    write_csv(path, columns, [f"label: {label}", f"model: {model}", f"z: {z:g}"])
+    slug = param_slug(dict(kwargs, model=model, z=z))
+    path = outdir / f"mg_boost_{model}_z{z:g}_{slug}.csv"
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: boost",
+               "units: k [h/Mpc], boost [dimensionless]",
+               f"model: {model}", f"z: {z:g}"])
 
     meta = {"model": model, "mg_parameter": mg_par, "z": z,
-            "max_boost": float(np.max(boost)),
-            "units": {"k": "h/Mpc", "boost": "dimensionless"}}
+            "in_training_box": in_box, "extrapolation_warnings": box_warnings,
+            "units": {"k": "h/Mpc", "boost": "dimensionless"},
+            "stats": summary_stats(k, boost, "k", "boost")}
     if "snapshot_z" in extra:
         meta["snapshot_z_used"] = extra["snapshot_z"]
-    return ArtifactResult(
-        status="success", files=[str(path)],
-        message=f"Computed {label}: max boost {np.max(boost):.3f} at "
-                f"k={k[np.argmax(boost)]:.2f} h/Mpc.",
-        metadata=meta,
-    )
+    if return_data:
+        meta["data"] = downsample_columns(columns)
+    message = (f"Computed {label}: max boost {np.max(boost):.3f} at "
+               f"k={k[np.argmax(boost)]:.2f} h/Mpc.")
+    if box_warnings:
+        message += " WARNING: " + "; ".join(box_warnings)
+    return ArtifactResult(status="success", files=[str(path)],
+                          message=message, metadata=meta)
 
 
 @validate_call
@@ -148,6 +180,7 @@ def compute_mg_pk(
     k_max: Annotated[float, Field(le=5.0)] = 3.0,
     n_points: Annotated[int, Field(ge=10, le=1000)] = 200,
     z: Annotated[float, Field(ge=0.0, le=1.5)] = 0.0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute the modified-gravity NONLINEAR P(k): MG boost x LCDM baseline.
 
@@ -172,19 +205,28 @@ def compute_mg_pk(
     mg_par = {"fofr": f"-log10|fR0|={minus_log10_fR0}",
               "ndgp": f"H0rc={H0rc}",
               "cubic_galileon": f"f_phi={f_phi}"}[model]
+    in_box, box_warnings = _check_mg_box(model, dict(kwargs, z=z))
     label = f"{model} ({mg_par}) x {baseline} z={z:g}"
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"pk_mg_{model}_{baseline}_z{z:g}.csv"
-    write_csv(path, {"k_h_per_Mpc": k, "Pk_Mpc_over_h_cubed": pk_mg,
-                     "boost": boost},
-              [f"label: {label}", f"model: {model}", f"baseline: {baseline}",
-               f"z: {z:g}"])
+    slug = param_slug(dict(kwargs, model=model, baseline=baseline, z=z))
+    path = outdir / f"pk_mg_{model}_{baseline}_z{z:g}_{slug}.csv"
+    columns = {"k_h_per_Mpc": k, "Pk_Mpc_over_h_cubed": pk_mg, "boost": boost}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: power_spectrum",
+               "variant: nonlinear_mg",
+               "units: k [h/Mpc], Pk [(Mpc/h)^3]",
+               f"model: {model}", f"baseline: {baseline}", f"z: {z:g}"])
     meta = {"model": model, "mg_parameter": mg_par, "baseline": baseline,
-            "z": z, "units": {"k": "h/Mpc", "Pk": "(Mpc/h)^3"}}
+            "z": z, "in_training_box": in_box,
+            "extrapolation_warnings": box_warnings,
+            "units": {"k": "h/Mpc", "Pk": "(Mpc/h)^3"},
+            "stats": summary_stats(k, pk_mg, "k", "Pk")}
     if "snapshot_z" in extra:
         meta["snapshot_z_used"] = extra["snapshot_z"]
-    return ArtifactResult(
-        status="success", files=[str(path)],
-        message=f"Computed P_MG(k) = {label}.",
-        metadata=meta,
-    )
+    if return_data:
+        meta["data"] = downsample_columns(columns)
+    message = f"Computed P_MG(k) = {label}."
+    if box_warnings:
+        message += " WARNING: " + "; ".join(box_warnings)
+    return ArtifactResult(status="success", files=[str(path)],
+                          message=message, metadata=meta)

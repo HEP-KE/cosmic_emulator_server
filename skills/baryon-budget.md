@@ -39,7 +39,11 @@ If the user wants to know what feedback does besides suppress P(k):
 
 ## Composing with gravity-only P(k)
 
-To hand the user a baryon-corrected spectrum: multiply a suppression CSV
-into a `compute_nonlinear_pk` result (same k-grid) and state which
-suppression model was used — or point them to `baccoemu` end-to-end, which
-does gravity + baryons self-consistently in one emulator.
+To hand the user a baryon-corrected spectrum, do it SERVER-SIDE:
+`baryonify_pk(pk_file=<compute_nonlinear_pk output>, model=..., params...)`
+— it evaluates the suppression on the input file's own k-grid and z, and
+records full provenance. For an MG universe with feedback, feed it the
+output of `compute_mg_pk`. Generic arithmetic between any two CSVs is
+`compose_spectra`. Never multiply numbers client-side. Alternative:
+`baccoemu` end-to-end (gravity + baryons self-consistently in one
+emulator).

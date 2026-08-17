@@ -5,7 +5,8 @@ from typing import Annotated
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, get_cached, quiet, resolve_outdir,
+from ..common import (ArtifactResult, downsample_columns, get_cached,
+                      param_slug, quiet, resolve_outdir, summary_stats,
                       write_csv)
 
 __all__ = ["emulate_lya_p1d"]
@@ -23,6 +24,7 @@ def emulate_lya_p1d(
     k_min_Mpc: Annotated[float, Field(ge=0.05)] = 0.1,
     k_max_Mpc: Annotated[float, Field(le=4.0)] = 3.0,
     n_points: Annotated[int, Field(ge=10, le=500)] = 100,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Emulate the Lyman-alpha forest 1D flux power spectrum P1D(k_par) with LaCE.
 
@@ -46,16 +48,22 @@ def emulate_lya_p1d(
 
     label = f"LaCE P1D (mF={mF}, Delta2_p={Delta2_p})"
     outdir = resolve_outdir(output_dir)
-    path = outdir / "lya_p1d.csv"
-    write_csv(path, {"k_par_1_per_Mpc": k, "P1D_Mpc": p1d,
-                     "k_P_over_pi": k * p1d / np.pi},
-              [f"label: {label}", f"igm_params: {model}",
-               "units: comoving Mpc (no h)"])
+    path = outdir / f"lya_p1d_{param_slug(model)}.csv"
+    columns = {"k_par_1_per_Mpc": k, "P1D_Mpc": p1d,
+               "k_P_over_pi": k * p1d / np.pi}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: p1d",
+               "units: k_par [1/Mpc comoving, no h], P1D [Mpc]",
+               f"igm_params: {model}"])
+    metadata = {"igm_params": model,
+                "units": {"k_par": "1/Mpc (comoving, no h)", "P1D": "Mpc"},
+                "emulator": "LaCE GP, Pedersen21 training set",
+                "stats": summary_stats(k, p1d, "k_par", "P1D")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Emulated P1D for {n_points} k bins "
                 f"{k_min_Mpc}..{k_max_Mpc} 1/Mpc.",
-        metadata={"igm_params": model,
-                  "units": {"k_par": "1/Mpc (comoving, no h)", "P1D": "Mpc"},
-                  "emulator": "LaCE GP, Pedersen21 training set"},
+        metadata=metadata,
     )

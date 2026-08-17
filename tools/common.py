@@ -62,6 +62,59 @@ def resolve_outdir(output_dir: str) -> Path:
     return outdir
 
 
+def param_slug(params: dict) -> str:
+    """Short stable hash of parameter values, used to make filenames unique.
+
+    Prevents parameter scans from silently overwriting each other's outputs
+    (every call with different inputs gets a different file name; identical
+    calls reuse the same name, which is idempotent).
+    """
+    import hashlib
+    blob = ",".join(f"{k}={params[k]}" for k in sorted(params))
+    return hashlib.sha1(blob.encode()).hexdigest()[:6]
+
+
+def varied_label(base: str, params: dict, defaults: dict) -> str:
+    """Label = base + the parameters that differ from the tool's defaults.
+
+    Three HMF runs at different sigma_8 must not all be labeled
+    'Mira-Titan HMF z=0'; this appends e.g. ' [sigma_8=0.75, w_0=-0.8]'.
+    """
+    diffs = [f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}"
+             for k, v in params.items()
+             if k in defaults and v != defaults[k]]
+    return f"{base} [{', '.join(diffs)}]" if diffs else base
+
+
+def downsample_columns(columns: dict, n: int = 80) -> dict:
+    """Downsample all columns to <= n points (same indices for every column)."""
+    length = len(next(iter(columns.values())))
+    if length <= n:
+        idx = np.arange(length)
+    else:
+        idx = np.unique(np.linspace(0, length - 1, n).astype(int))
+    return {k: np.round(np.asarray(v, dtype=float).ravel()[idx], 8).tolist()
+            for k, v in columns.items()}
+
+
+def summary_stats(x: np.ndarray, y: np.ndarray, x_name: str, y_name: str) -> dict:
+    """Always-on quotable numbers: extrema, median, and a few sampled points."""
+    x = np.asarray(x, dtype=float).ravel()
+    y = np.asarray(y, dtype=float).ravel()
+    finite = np.isfinite(y)
+    if not finite.any():
+        return {"note": "no finite values"}
+    xs, ys = x[finite], y[finite]
+    i_min, i_max = int(np.argmin(ys)), int(np.argmax(ys))
+    probes = np.unique(np.linspace(0, len(xs) - 1, 5).astype(int))
+    return {
+        f"min_{y_name}": float(ys[i_min]), f"min_at_{x_name}": float(xs[i_min]),
+        f"max_{y_name}": float(ys[i_max]), f"max_at_{x_name}": float(xs[i_max]),
+        f"median_{y_name}": float(np.median(ys)),
+        "samples": {f"{x_name}={xs[i]:.4g}": float(ys[i]) for i in probes},
+    }
+
+
 def write_csv(path: Path, columns: dict[str, np.ndarray], header_lines: list[str]) -> None:
     """Write named columns with '# key: value' header comments."""
     arrays = [np.asarray(v, dtype=float).ravel() for v in columns.values()]

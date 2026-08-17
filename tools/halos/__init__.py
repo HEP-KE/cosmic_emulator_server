@@ -5,8 +5,13 @@ from typing import Annotated
 
 from pydantic import Field, validate_call
 
-from ..common import (ArtifactResult, get_cached, quiet, resolve_outdir,
-                      write_csv)
+from ..common import (ArtifactResult, downsample_columns, get_cached,
+                      param_slug, quiet, resolve_outdir, summary_stats,
+                      varied_label, write_csv)
+
+_HMF_DEFAULTS = {"Ommh2": 0.147, "Ombh2": 0.022, "Omnuh2": 0.0006,
+                 "sigma_8": 0.8, "h": 0.67, "n_s": 0.965,
+                 "w_0": -1.0, "w_a": 0.0}
 
 __all__ = ["compute_hmf", "predict_cluster_gas_params"]
 
@@ -26,6 +31,8 @@ def compute_hmf(
     log10_M_max: Annotated[float, Field(ge=13.5, le=16.0)] = 15.5,
     n_masses: Annotated[int, Field(ge=5, le=200)] = 50,
     z: Annotated[float, Field(ge=0.0, le=2.0)] = 0.0,
+    random_seed: Annotated[int, Field(ge=0, description="Seed for the emulator's Monte-Carlo error draws — fixed by default so identical calls are bitwise reproducible.")] = 0,
+    return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute the halo mass function dn/dlnM with the Mira-Titan GP emulator.
 
@@ -41,22 +48,35 @@ def compute_hmf(
              "n_s": n_s, "h": h, "sigma_8": sigma_8, "w_0": w_0, "w_a": w_a}
     masses = np.logspace(log10_M_min, log10_M_max, n_masses)
     with quiet():
+        # the emulator's error estimate uses np.random draws internally;
+        # seed for bitwise-reproducible outputs (provenance/caching)
+        np.random.seed(random_seed)
         hmf_mean, hmf_err = emu.predict(cosmo, z, masses)
     hmf = np.ravel(np.asarray(hmf_mean))
     err = np.ravel(np.asarray(hmf_err))
 
-    label = f"Mira-Titan HMF z={z:g}"
+    label = varied_label(f"Mira-Titan HMF z={z:g}", cosmo, _HMF_DEFAULTS)
     outdir = resolve_outdir(output_dir)
-    path = outdir / f"hmf_miratitan_z{z:g}.csv"
-    write_csv(path, {"M200c_Msun_per_h": masses, "dn_dlnM_h3_Mpc3": hmf,
-                     "emulator_std": err},
-              [f"label: {label}", f"z: {z:g}", f"cosmo: {cosmo}"])
+    slug = param_slug(dict(cosmo, z=z))
+    path = outdir / f"hmf_miratitan_z{z:g}_{slug}.csv"
+    columns = {"M200c_Msun_per_h": masses, "dn_dlnM_h3_Mpc3": hmf,
+               "emulator_std": err}
+    write_csv(path, columns,
+              [f"label: {label}", "quantity: hmf",
+               "units: M200c [Msun/h], dn/dlnM [(Mpc/h)^-3]",
+               f"z: {z:g}", f"cosmo: {cosmo}",
+               f"random_seed: {random_seed}"])
+    metadata = {"cosmology": cosmo, "z": z, "random_seed": random_seed,
+                "units": {"M": "M200c, Msun/h", "dn/dlnM": "(Mpc/h)^-3"},
+                "stats": summary_stats(masses, hmf, "M", "dn_dlnM")}
+    if return_data:
+        metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
         message=f"Computed dn/dlnM for {n_masses} masses "
-                f"1e{log10_M_min:g}..1e{log10_M_max:g} Msun/h at z={z:g}.",
-        metadata={"cosmology": cosmo, "z": z,
-                  "units": {"M": "M200c, Msun/h", "dn/dlnM": "(Mpc/h)^-3"}},
+                f"1e{log10_M_min:g}..1e{log10_M_max:g} Msun/h at z={z:g} "
+                f"({label}).",
+        metadata=metadata,
     )
 
 
