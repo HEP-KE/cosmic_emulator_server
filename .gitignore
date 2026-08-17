@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+output/
+external/*/
+!external/.gitkeep
+*.bak
+.DS_Store
+background/
