@@ -85,3 +85,27 @@ for upstream PRs:
 
 - Nothing in the approved list is unresolved. The closest calls were
   csstemu/SEPIA/LaCE, all fixed by the vendored patches above.
+
+## Scaling beyond one environment
+
+One shared env for ~20 emulators works **today**, but treat it as a lucky
+alignment, not an architecture. The pressure points to watch:
+
+- **jaxcapse pins jax 0.4.x for the whole env** — the first package that
+  requires jax >= 0.5 forces a split (or dropping jaxcapse).
+- **TF, torch, and JAX coexist** only because their current wheels agree on
+  numpy/absl/protobuf versions; any one of them majoring can break the
+  other two.
+- **sklearn/scipy pickle compatibility** (GP emulators) means upgrading
+  scipy/sklearn can silently invalidate vendored model files.
+- Every new emulator added multiplies the chance of an unresolvable pin.
+
+**The planned escape hatch is per-cluster environments**, one MCP server
+process per dependency cluster (numpy+sklearn+SEPIA | JAX | torch | TF |
+compiled), each on its own port behind the same reverse proxy. The tool
+families already map cleanly onto clusters, so the split is mechanical:
+move the family's tool subpackage into a thin per-cluster server package,
+keep `tools/common.py` shared, and register N endpoints instead of one.
+Clients see the same tools either way. Do the split at the first hard
+conflict — not preemptively, since one env is operationally simpler
+(one systemd unit, one smoke test, one cache).
