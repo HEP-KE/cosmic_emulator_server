@@ -33,7 +33,10 @@ def _theory_hmf(backend, mass_def, cosmo, masses, z):
     if cosmo["w_0"] != -1.0 or cosmo["w_a"] != 0.0:
         params.update(de_model="w0wa", w0=cosmo["w_0"], wa=cosmo["w_a"])
     name = f"hmf_{param_slug(params)}"
-    ccosmo.setCosmology(name, **params)
+    # persistence='' stops colossus writing interpolation tables to
+    # $HOME/.colossus — read-only under the production systemd sandbox
+    # (same failure class as the PyBird cache); in-memory caching still works
+    ccosmo.setCosmology(name, params, persistence="")
 
     model = _THEORY_MODELS[backend]
     if model in ("press74", "sheth99"):

@@ -108,8 +108,11 @@ async def run(session: ClientSession):
     await call(s, "emulate_subgrid_statistic",
                {"output_dir": OUT, "statistic": "Pk"})
 
-    # --- halos + igm
+    # --- halos + igm (theory backend included: colossus must not need
+    # writable caches under the service sandbox)
     await call(s, "compute_hmf", {"output_dir": OUT, "return_data": True})
+    await call(s, "compute_hmf", {"output_dir": OUT, "backend": "tinker08",
+                                  "mass_def": "200c"})
     await call(s, "predict_cluster_gas_params", {"output_dir": OUT})
     await call(s, "emulate_lya_p1d", {"output_dir": OUT})
 
