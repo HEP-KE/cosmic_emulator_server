@@ -26,7 +26,7 @@ $PIP install "setuptools<81"
 
 # --- base scientific stack + pip-clean emulators -------------------------
 $PIP install numpy scipy matplotlib h5py scikit-learn pandas \
-    camb pyspk MiraTitanHMFemulator emantis
+    camb pyspk MiraTitanHMFemulator emantis colossus
 
 # --- JAX cluster ---------------------------------------------------------
 # NOTE: jaxcapse pins jax==0.4.x; install it first so the resolver settles,

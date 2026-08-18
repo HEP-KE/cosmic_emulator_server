@@ -242,6 +242,20 @@ EMULATORS: dict[str, dict] = {
         "license": "MIT",
         "status": "active",
     },
+    "colossus_hmf": {
+        "family": "halos",
+        "role": "linear-theory / analytic HMF baselines: Tinker08, Sheth-Tormen, Press-Schechter (colossus)",
+        "tools": ["compute_hmf"],
+        "outputs": "dn/dlnM [(Mpc/h)^-3] vs M [Msun/h]; tinker08 at 200c/200m/500c, ST+PS at FoF",
+        "ranges": {"note": "analytic fits, no training box; any reasonable "
+                           "cosmology incl. w0wa. The tool refuses "
+                           "mass-definition mismatches (FoF fits vs SO "
+                           "masses) that fake factor-of-a-few discrepancies."},
+        "accuracy": "tinker08 ~5% vs simulations at its calibrated definitions; PS/ST are historical baselines",
+        "citation": "Diemer arXiv:1712.04512 (colossus); Tinker et al. 0803.2706; Sheth & Tormen astro-ph/9901122; Press & Schechter 1974",
+        "license": "MIT (colossus)",
+        "status": "active",
+    },
     "picasso": {
         "family": "halos",
         "role": "cluster gas thermodynamics painted on gravity-only halos (JAX NN)",

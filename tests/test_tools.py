@@ -170,6 +170,30 @@ def test_hmf():
     assert np.all(np.diff(hmf) < 0), "HMF must decrease with mass"
 
 
+def test_hmf_theory_backends():
+    r_emu = _ok(halos.compute_hmf(output_dir=OUT))
+    r_t08 = _ok(halos.compute_hmf(output_dir=OUT, backend="tinker08",
+                                  mass_def="200c"))
+    _, c_emu = read_csv(r_emu.files[0])
+    _, c_t08 = read_csv(r_t08.files[0])
+    # emulator vs Tinker08 at matched 200c definition: ~10% at group/cluster
+    # masses (the reviewer's linear-theory-vs-emulator overlay, done right)
+    sel = c_emu["M200c_Msun_per_h"] < 3e14
+    ratio = c_t08["dn_dlnM_h3_Mpc3"][sel] / c_emu["dn_dlnM_h3_Mpc3"][sel]
+    assert np.all(np.abs(ratio - 1) < 0.25), "tinker08 vs miratitan deviates >25%"
+    # FoF fits run with mass_def='fof' and refuse SO masses
+    _ok(halos.compute_hmf(output_dir=OUT, backend="sheth_tormen", mass_def="fof"))
+    with pytest.raises(ValueError, match="friends-of-friends"):
+        halos.compute_hmf(output_dir=OUT, backend="press_schechter",
+                          mass_def="200c")
+    with pytest.raises(ValueError, match="M200c only"):
+        halos.compute_hmf(output_dir=OUT, backend="miratitan", mass_def="500c")
+    # the overlay the reviewer wanted: emulator + theory in one figure
+    _ok(pk.plot_pk_comparison(
+        spectrum_files=[r_emu.files[0], r_t08.files[0]], output_dir=OUT,
+        title="HMF: emulator vs Tinker08"))
+
+
 def test_cluster_gas():
     r = _ok(halos.predict_cluster_gas_params(output_dir=OUT))
     assert len(r.metadata["gas_model_params"]) >= 4

@@ -8,7 +8,7 @@ Recreate it with `bash scripts/setup_env.sh`; validate with
 
 | Cluster | Packages |
 |---|---|
-| numpy/scipy | camb, symbolic_pofk (syren), pyspk, MiraTitanHMFemulator, csstemu (vendored), CCToolkit-style fits |
+| numpy/scipy | camb, symbolic_pofk (syren), pyspk, MiraTitanHMFemulator, colossus (analytic HMF), csstemu (vendored), CCToolkit-style fits |
 | sklearn GP | emantis, nDGPemu, subgrid_emu, GPy (for LaCE) |
 | SEPIA GP | sepia (vendored patch), CubicGalileonEmu, subgrid_emu |
 | JAX | jax 0.4.38 (pinned by jaxcapse), jax-cosmo, cosmopower-jax, jaxcapse, jaxeffort, baccoemu, picasso |

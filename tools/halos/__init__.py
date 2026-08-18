@@ -1,7 +1,7 @@
 """Halo and cluster tools: mass function and cluster gas modeling."""
 
 import numpy as np
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, validate_call
 
@@ -15,10 +15,51 @@ _HMF_DEFAULTS = {"Ommh2": 0.147, "Ombh2": 0.022, "Omnuh2": 0.0006,
 
 __all__ = ["compute_hmf", "predict_cluster_gas_params"]
 
+# colossus model names for the theory backends; press74/sheth99 are
+# friends-of-friends multiplicity functions (colossus requires mdef='fof'),
+# tinker08 is calibrated for spherical-overdensity definitions.
+_THEORY_MODELS = {"tinker08": "tinker08", "sheth_tormen": "sheth99",
+                  "press_schechter": "press74"}
+
+
+def _theory_hmf(backend, mass_def, cosmo, masses, z):
+    from colossus.cosmology import cosmology as ccosmo
+    from colossus.lss import mass_function
+
+    h = cosmo["h"]
+    params = {"flat": True, "H0": h * 100,
+              "Om0": cosmo["Ommh2"] / h**2, "Ob0": cosmo["Ombh2"] / h**2,
+              "sigma8": cosmo["sigma_8"], "ns": cosmo["n_s"]}
+    if cosmo["w_0"] != -1.0 or cosmo["w_a"] != 0.0:
+        params.update(de_model="w0wa", w0=cosmo["w_0"], wa=cosmo["w_a"])
+    name = f"hmf_{param_slug(params)}"
+    ccosmo.setCosmology(name, **params)
+
+    model = _THEORY_MODELS[backend]
+    if model in ("press74", "sheth99"):
+        if mass_def != "fof":
+            raise ValueError(
+                f"{backend} is a friends-of-friends multiplicity function; "
+                "call it with mass_def='fof'. For an apples-to-apples "
+                "comparison against the Mira-Titan emulator (M200c), use "
+                "backend='tinker08' with mass_def='200c' — evaluating an "
+                "FoF-calibrated fit at an SO mass is the classic way to get "
+                "a spurious factor-of-a-few discrepancy.")
+        mdef = "fof"
+    else:
+        mdef = mass_def
+        if mdef == "fof":
+            raise ValueError("tinker08 is SO-calibrated; use mass_def "
+                             "'200c', '200m', or '500c'.")
+    return mass_function.massFunction(masses, z, mdef=mdef, model=model,
+                                      q_out="dndlnM")
+
 
 @validate_call
 def compute_hmf(
     output_dir: Annotated[str, Field(min_length=1)],
+    backend: Annotated[Literal["miratitan", "tinker08", "sheth_tormen", "press_schechter"], Field(description="'miratitan' = simulation-calibrated GP emulator (M200c only). The rest are linear-theory/analytic fits via colossus: 'tinker08' (SO-calibrated, comparable to miratitan at mass_def='200c'), 'sheth_tormen' and 'press_schechter' (FoF multiplicity functions, mass_def='fof').")] = "miratitan",
+    mass_def: Annotated[Literal["200c", "200m", "500c", "fof"], Field(description="Mass definition. miratitan supports only '200c'; tinker08 supports the SO definitions; press_schechter/sheth_tormen require 'fof'.")] = "200c",
     Ommh2: Annotated[float, Field(ge=0.12, le=0.155, description="Physical total matter density Omega_m h^2")] = 0.147,
     Ombh2: Annotated[float, Field(ge=0.0215, le=0.0235)] = 0.022,
     Omnuh2: Annotated[float, Field(ge=0.0, le=0.01, description="Physical neutrino density (0.0006 ~ 0.06 eV)")] = 0.0006,
@@ -34,48 +75,78 @@ def compute_hmf(
     random_seed: Annotated[int, Field(ge=0, description="Seed for the emulator's Monte-Carlo error draws — fixed by default so identical calls are bitwise reproducible.")] = 0,
     return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
-    """Compute the halo mass function dn/dlnM with the Mira-Titan GP emulator.
+    """Compute the halo mass function dn/dlnM — emulator or linear-theory fits.
 
-    Masses are M200c in Msun/h; output dn/dlnM is comoving [(Mpc/h)^-3].
-    Accuracy <2% for 1e13-1e14 Msun/h at z<1, degrading to ~10% at 1e15.
-    The parameter box is the Mira-Titan design (note Ommh2/Ombh2 are
-    PHYSICAL densities). Output CSV: M200c, dn/dlnM.
+    Backends: "miratitan" (simulation-calibrated GP emulator, M200c,
+    <2% for 1e13-1e14 Msun/h at z<1, ~10% at 1e15, includes emulator_std)
+    and three theory baselines via colossus: "tinker08" (SO-calibrated fit
+    — the right one to overlay against miratitan, at mass_def='200c'),
+    "sheth_tormen" and "press_schechter" (FoF multiplicity functions,
+    mass_def='fof'; comparing those against SO masses produces the classic
+    factor-of-a-few artifact, so the tool refuses mismatched definitions).
+    All backends share the same cosmology arguments (Ommh2/Ombh2 are
+    PHYSICAL densities) and the same output convention: M [Msun/h],
+    dn/dlnM comoving [(Mpc/h)^-3] — files overlay directly in
+    plot_pk_comparison. Emulator-vs-theory comparison is a good validation
+    workflow: expect ~5-10% agreement between miratitan and tinker08 at
+    200c, and larger, mass-dependent deviations for the older fits.
     """
-    import MiraTitanHMFemulator
-
-    emu = get_cached("miratitan_hmf", MiraTitanHMFemulator.Emulator)
     cosmo = {"Ommh2": Ommh2, "Ombh2": Ombh2, "Omnuh2": Omnuh2,
              "n_s": n_s, "h": h, "sigma_8": sigma_8, "w_0": w_0, "w_a": w_a}
     masses = np.logspace(log10_M_min, log10_M_max, n_masses)
-    with quiet():
-        # the emulator's error estimate uses np.random draws internally;
-        # seed for bitwise-reproducible outputs (provenance/caching)
-        np.random.seed(random_seed)
-        hmf_mean, hmf_err = emu.predict(cosmo, z, masses)
-    hmf = np.ravel(np.asarray(hmf_mean))
-    err = np.ravel(np.asarray(hmf_err))
 
-    label = varied_label(f"Mira-Titan HMF z={z:g}", cosmo, _HMF_DEFAULTS)
+    if backend == "miratitan":
+        import MiraTitanHMFemulator
+        if mass_def != "200c":
+            raise ValueError("The Mira-Titan emulator provides M200c only; "
+                             "use backend='tinker08' for other SO "
+                             "definitions ('200m', '500c').")
+        emu = get_cached("miratitan_hmf", MiraTitanHMFemulator.Emulator)
+        with quiet():
+            # the emulator's error estimate uses np.random draws internally;
+            # seed for bitwise-reproducible outputs (provenance/caching)
+            np.random.seed(random_seed)
+            hmf_mean, hmf_err = emu.predict(cosmo, z, masses)
+        hmf = np.ravel(np.asarray(hmf_mean))
+        err = np.ravel(np.asarray(hmf_err))
+        base_label = f"Mira-Titan HMF z={z:g}"
+        err_note = "emulator_std is the GP 1-sigma uncertainty"
+    else:
+        with quiet():
+            hmf = np.ravel(np.asarray(_theory_hmf(backend, mass_def, cosmo,
+                                                  masses, z)))
+        err = np.zeros_like(hmf)
+        base_label = f"{backend} ({mass_def}) HMF z={z:g}"
+        err_note = ("analytic fit - emulator_std column is 0; typical "
+                    "calibration accuracy ~5-10% (tinker08) or worse "
+                    "(older fits)")
+
+    label = varied_label(base_label, cosmo, _HMF_DEFAULTS)
     outdir = resolve_outdir(output_dir)
-    slug = param_slug(dict(cosmo, z=z))
-    path = outdir / f"hmf_miratitan_z{z:g}_{slug}.csv"
-    columns = {"M200c_Msun_per_h": masses, "dn_dlnM_h3_Mpc3": hmf,
+    slug = param_slug(dict(cosmo, z=z, backend=backend, mdef=mass_def))
+    path = outdir / f"hmf_{backend}_z{z:g}_{slug}.csv"
+    mass_col = f"M{mass_def}_Msun_per_h"
+    columns = {mass_col: masses, "dn_dlnM_h3_Mpc3": hmf,
                "emulator_std": err}
     write_csv(path, columns,
               [f"label: {label}", "quantity: hmf",
-               "units: M200c [Msun/h], dn/dlnM [(Mpc/h)^-3]",
+               f"units: M ({mass_def}) [Msun/h], dn/dlnM [(Mpc/h)^-3]",
+               f"backend: {backend}", f"mass_def: {mass_def}",
                f"z: {z:g}", f"cosmo: {cosmo}",
                f"random_seed: {random_seed}"])
-    metadata = {"cosmology": cosmo, "z": z, "random_seed": random_seed,
-                "units": {"M": "M200c, Msun/h", "dn/dlnM": "(Mpc/h)^-3"},
+    metadata = {"backend": backend, "mass_def": mass_def, "cosmology": cosmo,
+                "z": z, "random_seed": random_seed,
+                "units": {"M": f"{mass_def}, Msun/h",
+                          "dn/dlnM": "(Mpc/h)^-3"},
+                "uncertainty_note": err_note,
                 "stats": summary_stats(masses, hmf, "M", "dn_dlnM")}
     if return_data:
         metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
         status="success", files=[str(path)],
-        message=f"Computed dn/dlnM for {n_masses} masses "
-                f"1e{log10_M_min:g}..1e{log10_M_max:g} Msun/h at z={z:g} "
-                f"({label}).",
+        message=f"Computed dn/dlnM ({backend}, {mass_def}) for {n_masses} "
+                f"masses 1e{log10_M_min:g}..1e{log10_M_max:g} Msun/h at "
+                f"z={z:g}.",
         metadata=metadata,
     )
 
