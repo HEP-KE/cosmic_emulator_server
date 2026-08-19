@@ -11,12 +11,14 @@ same cosmology and reporting the spread.
 1. Confirm the cosmology with the user (defaults: Om=0.31, Ob=0.049,
    h=0.67, ns=0.965, As=2.1e-9, mnu=0, w0=-1, wa=0, z=0). Check each
    backend's box with `describe_emulator` (keys: `baccoemu`, `euclidemu2`,
-   `csst`, `gokunemu`, `camb`, `syren`) — for non-vanilla cosmologies some
+   `csst`, `gokunemu`, `cosmicemu_mt4`, `camb`, `syren`) — for non-vanilla cosmologies some
    backends will be out of range; run the subset that is valid and say so.
 2. Call `compute_nonlinear_pk` once per backend, same parameters and k-grid
-   (suggest `k_min=0.01`, `k_max=5`, `n_points=200`; drop to `k_max=3` if
-   csst/gokunemu are in the set and z > 2): `baccoemu`, `euclidemu2`,
-   `csst`, `gokunemu`, `camb_hmcode`, `syren_halofit`.
+   (suggest `k_min=0.01`, `k_max=4.5`, `n_points=200`): `baccoemu`,
+   `euclidemu2`, `csst`, `gokunemu`, `miratitan`, `camb_hmcode`,
+   `syren_halofit`. miratitan (Mira-Titan IV / CosmicEmu, HACC) has the
+   narrowest box (sigma8 0.7-0.9, z <= 2) — drop it when out of range and
+   say so.
 3. Plot all files with `plot_pk_comparison`, `reference_index` pointing at
    `baccoemu` (or the user's preferred reference).
 4. Read the per-backend metadata (never the CSVs themselves) and report:

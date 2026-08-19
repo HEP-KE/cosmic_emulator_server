@@ -98,6 +98,26 @@ EMULATORS: dict[str, dict] = {
         "license": "MIT",
         "status": "active",
     },
+    "cosmicemu_mt4": {
+        "family": "pk",
+        "role": "Mira-Titan IV / CosmicEmu nonlinear P(k) (HACC suite, via pyccl's native port)",
+        "tools": ["compute_nonlinear_pk"],
+        "outputs": "P(k) to k ~ 5 Mpc^-1 (~7 h/Mpc), z 0..2.02; served in k [h/Mpc], P [(Mpc/h)^3]",
+        "ranges": {"omega_m (Om*h^2)": [0.12, 0.155],
+                   "omega_b (Ob*h^2)": [0.0215, 0.0235],
+                   "omega_nu (mnu/93.14)": [0.0, 0.01],
+                   "sigma8": [0.7, 0.9], "h": [0.55, 0.85],
+                   "ns": [0.85, 1.05], "w0": [-1.3, -0.7],
+                   "(-w0-wa)^0.25": [0.3, 1.29], "z": [0.0, 2.02],
+                   "note": "native box is in PHYSICAL densities — enforced "
+                           "server-side via in_training_box on derived values"},
+        "accuracy": "2-3% over the design space",
+        "citation": "Moran et al. arXiv:2207.12345 (Mira-Titan IV); CCL arXiv:1812.05995",
+        "license": "BSD (CCL)",
+        "note": "backend='miratitan' in compute_nonlinear_pk; pairs with the "
+                "miratitan HMF backend (same simulation campaign)",
+        "status": "active",
+    },
     # -------------------------------------------------------- gravity family
     "emantis": {
         "family": "gravity",

@@ -17,12 +17,12 @@ __all__ = ["compute_linear_pk", "compute_nonlinear_pk", "compose_spectra",
 
 LinearBackend = Literal["camb", "syren", "baccoemu"]
 NonlinearBackend = Literal["camb_hmcode", "syren_halofit", "baccoemu",
-                           "euclidemu2", "csst", "gokunemu"]
+                           "euclidemu2", "csst", "gokunemu", "miratitan"]
 
 _DEFAULTS = {"Om": 0.31, "Ob": 0.049, "h": 0.67, "ns": 0.965, "As": 2.1e-9,
              "sigma8": None, "mnu": 0.0, "w0": -1.0, "wa": 0.0}
 
-_SIGMA8_BACKENDS = {"syren", "syren_halofit", "baccoemu"}
+_SIGMA8_BACKENDS = {"syren", "syren_halofit", "baccoemu", "miratitan"}
 
 
 def _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa):
@@ -127,6 +127,10 @@ def compute_nonlinear_pk(
     - "euclidemu2": Euclid boost x CAMB linear, ~1% to k=10, nu-w0waCDM
     - "csst": Kun-suite GP, 1% to k=10, z<=2
     - "gokunemu": widest 10-parameter space (w0waCDM + mnu)
+    - "miratitan": Mira-Titan IV / CosmicEmu (via pyccl), 2-3%, the
+      Moran et al. 2022 HACC suite — pairs with the miratitan HMF backend;
+      narrowest parameter box (sigma8 0.7-0.9, z <= 2), check the response's
+      in_training_box
     - "camb_hmcode": HMcode-2020 halo model (~2.5%, any cosmology)
     - "syren_halofit": closed-form, fastest, ~1%
 

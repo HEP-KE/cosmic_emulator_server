@@ -69,6 +69,8 @@ async def run(session: ClientSession):
                       "return_data": True})
     nl2 = await call(s, "compute_nonlinear_pk",
                      {"output_dir": OUT, "backend": "csst"})
+    await call(s, "compute_nonlinear_pk",
+               {"output_dir": OUT, "backend": "miratitan", "sigma8": 0.8})
     if nl1 and nl2:
         await call(s, "plot_pk_comparison",
                    {"spectrum_files": [nl1["files"][0], nl2["files"][0]],

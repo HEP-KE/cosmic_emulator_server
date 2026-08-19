@@ -66,7 +66,7 @@ def test_linear_pk_backends():
 def test_nonlinear_pk_backends():
     results = {}
     for backend in ("baccoemu", "euclidemu2", "csst", "gokunemu",
-                    "camb_hmcode", "syren_halofit"):
+                    "miratitan", "camb_hmcode", "syren_halofit"):
         r = _ok(pk.compute_nonlinear_pk(output_dir=OUT, backend=backend,
                                         k_min=0.01, k_max=3.0, n_points=60))
         _, cols = read_csv(r.files[0])
