@@ -32,6 +32,7 @@ tool_modules = [
     "tools.baryons",
     "tools.halos",
     "tools.igm",
+    "mcp_server.dispatch",
 ]
 
 [tool.setuptools.packages.find]

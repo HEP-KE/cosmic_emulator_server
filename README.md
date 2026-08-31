@@ -113,3 +113,25 @@ The server is designed for a plain Linux box behind a reverse proxy:
 5. After every deploy, run `python tests/smoke_server.py <url>` — it calls
    every tool through the served path (transport + sandbox + filesystem),
    which catches failures the in-process tests cannot.
+
+## Run on HPC (optional)
+
+The server can execute its P(k) backends on DOE facilities through the
+[hep-genesis](https://github.com/HEP-KE/hep-genesis-agent) dispatch engine.
+Local execution is the default and needs none of this.
+
+```bash
+pip install -e <hep-genesis-agent>/backend[iri]   # into this server's env
+```
+
+Then, in a session: `set_dispatch("polaris")` (or `"perlmutter"`) makes each
+`compute_linear_pk` / `compute_nonlinear_pk` call one facility job (the
+`tools/` package is staged, the backend runs on a compute node with its pip
+deps installed per `DISPATCH_PIP_DEPS`, the P(k) array comes back and the
+CSV is still written by this server, so downstream tools work unchanged).
+The `csst` backend needs vendored patches from `external/` and stays
+local-only. All other tool families (gravity, CMB, LSS, baryons, halos,
+IGM) currently run locally regardless of the dispatch setting.
+`get_dispatch` reports the site; `auth_status` reports facility sign-in
+(done via the hep-genesis auth CLIs or desktop app, plus Globus Connect
+Personal running locally). `set_dispatch("local")` switches back.

@@ -266,3 +266,31 @@ NONLINEAR_BACKENDS = {
     "gokunemu": goku_nonlinear,
     "miratitan": miratitan_nonlinear,
 }
+
+# Pip requirements per backend when its kernel runs on an HPC compute node
+# (numpy/pydantic come from the tools-package import chain and are added by
+# the wrapper). Backends absent here need the vendored patches in external/
+# (see ENVIRONMENT.md), which pip cannot reproduce on a node — csst.
+# camb appears wherever _resolve_sigma8 or a CAMB linear spectrum may run.
+DISPATCH_PIP_DEPS = {
+    "camb": ["camb"],
+    "camb_hmcode": ["camb"],
+    "syren": ["symbolic_pofk@git+https://github.com/DeaglanBartlett/symbolic_pofk", "camb"],
+    "syren_halofit": ["symbolic_pofk@git+https://github.com/DeaglanBartlett/symbolic_pofk", "camb"],
+    "baccoemu": ["baccoemu", "camb"],
+    "euclidemu2": ["euclidemu2", "camb"],
+    "gokunemu": ["gokunemu", "torch"],
+    "miratitan": ["pyccl", "camb"],
+}
+
+
+def compute_pk(kind: str, backend: str, params: dict, k, z: float) -> list:
+    """HPC-dispatch kernel behind compute_linear_pk / compute_nonlinear_pk.
+
+    Arguments and return value are JSON-safe (the k grid arrives as a list,
+    P(k) goes back as one); the wrapper writes the CSV wherever the server
+    runs, so downstream tools are unaffected by where this executed.
+    """
+    table = LINEAR_BACKENDS if kind == "linear" else NONLINEAR_BACKENDS
+    pk = table[backend](params, np.asarray(k, dtype=float), z)
+    return np.asarray(pk, dtype=float).tolist()

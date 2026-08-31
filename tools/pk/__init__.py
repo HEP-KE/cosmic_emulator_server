@@ -31,8 +31,31 @@ def _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa):
 
 
 def _run(kind, backend, params, k, z, output_dir, return_data) -> ArtifactResult:
-    table = backends.LINEAR_BACKENDS if kind == "linear" else backends.NONLINEAR_BACKENDS
-    pk = table[backend](params, k, z)
+    from mcp_server.dispatch import remote_site, run_kernel  # lazy: server-only
+
+    site = remote_site()
+    if site:
+        deps = backends.DISPATCH_PIP_DEPS.get(backend)
+        if deps is None:
+            raise ValueError(
+                f"Backend {backend!r} cannot run on {site}: it needs the "
+                "vendored patches in external/ (see ENVIRONMENT.md), which "
+                "pip cannot install on a compute node. Use set_dispatch"
+                "('local') for this backend, or pick a dispatchable one.")
+        result = run_kernel(
+            "pk.backends.compute_pk",
+            {"kind": kind, "backend": backend, "params": params,
+             "k": k.tolist(), "z": z},
+            pip_deps=["numpy", "pydantic"] + deps,
+            # torch alone can take minutes to install into a fresh job env
+            duration=1200 if backend == "gokunemu" else 600,
+        )
+        pk = np.asarray(result["result"], dtype=float)
+        computed_on = result.get("host", site)
+    else:
+        table = backends.LINEAR_BACKENDS if kind == "linear" else backends.NONLINEAR_BACKENDS
+        pk = table[backend](params, k, z)
+        computed_on = "local"
 
     box_params = dict(params)
     if backend in _SIGMA8_BACKENDS and box_params.get("sigma8") is None:
@@ -51,6 +74,7 @@ def _run(kind, backend, params, k, z, output_dir, return_data) -> ArtifactResult
 
     metadata = {
         "backend": backend, "z": z, "params": shown,
+        "computed_on": computed_on,
         "in_training_box": in_box, "extrapolation_warnings": warnings,
         "units": {"k": "h/Mpc", "Pk": "(Mpc/h)^3"},
         "sigma8_convention": "sigma8 is sigma8(z=0); the spectrum is evolved to z",
@@ -59,7 +83,9 @@ def _run(kind, backend, params, k, z, output_dir, return_data) -> ArtifactResult
     if return_data:
         metadata["data"] = downsample_columns(columns)
     message = (f"Computed {kind} P(k) with {backend} at z={z:g} "
-               f"({len(k)} points, k = {k[0]:.4g}..{k[-1]:.4g} h/Mpc).")
+               f"({len(k)} points, k = {k[0]:.4g}..{k[-1]:.4g} h/Mpc"
+               + (f", on {computed_on}" if computed_on != "local" else "")
+               + ").")
     if warnings:
         message += " WARNING: outside training box — " + "; ".join(warnings)
     return ArtifactResult(status="success", files=[str(path)],
@@ -95,6 +121,10 @@ def compute_linear_pk(
     quotable summary stats; set return_data=true to also get the arrays
     inline. Output columns: k [h/Mpc], P(k) [(Mpc/h)^3]. Pass the returned
     file path to other tools — never copy full arrays between tools.
+
+    When dispatch is set to an HPC site (set_dispatch tool), the backend
+    runs on a facility compute node (one job per call, minutes); the CSV is
+    still written locally, so downstream tools are unaffected.
     """
     return _run("linear", backend,
                 _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa),
@@ -140,6 +170,11 @@ def compute_nonlinear_pk(
     the numbers. Running several backends at one cosmology and comparing
     with plot_pk_comparison is the recommended production cross-check.
     Output: k [h/Mpc], P(k) [(Mpc/h)^3].
+
+    When dispatch is set to an HPC site (set_dispatch tool), the backend
+    runs on a facility compute node (one job per call, minutes; "csst"
+    needs vendored patches and stays local-only); the CSV is still written
+    locally, so downstream tools are unaffected.
     """
     return _run("nonlinear", backend,
                 _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa),
