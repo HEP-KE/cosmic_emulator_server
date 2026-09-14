@@ -116,9 +116,25 @@ The server is designed for a plain Linux box behind a reverse proxy:
 
 ## Run on HPC (optional)
 
-The server can execute its P(k) backends on DOE facilities through the
+The P(k) backends can execute on DOE facilities (ALCF Polaris, NERSC
+Perlmutter) through the
 [hep-genesis](https://github.com/HEP-KE/hep-genesis-agent) dispatch engine.
-Local execution is the default and needs none of this.
+Local execution is the default and needs none of this. Two modes, split by
+where the facility credentials live:
+
+**Client-side dispatch (hosted deployments — recommended).** The server
+never holds tokens, Globus endpoints, or facility config; it only hands its
+kernels over. The `export_dispatch_pack` tool returns the `tools/` package
+(text files + a manifest: kernel entry point, per-backend node pip deps
+from `DISPATCH_PIP_DEPS`, walltime hints). The CLIENT — the user's
+hep-genesis harness, wherever it runs — saves the pack and dispatches it
+under its own credentials via its facility servers' `run_pack_kernel` tool
+(or the hep-genesis sidecar's `POST /jobs` with `pack=`); the P(k) list
+comes back client-side in `results.json`. Deploying this server to a VM
+therefore requires NOTHING beyond the server itself: no hep-genesis
+install, no facility sign-in, no Globus.
+
+**Server-side dispatch (running the server on your own machine).**
 
 ```bash
 pip install -e <hep-genesis-agent>/backend[iri]   # into this server's env
@@ -129,9 +145,13 @@ Then, in a session: `set_dispatch("polaris")` (or `"perlmutter"`) makes each
 `tools/` package is staged, the backend runs on a compute node with its pip
 deps installed per `DISPATCH_PIP_DEPS`, the P(k) array comes back and the
 CSV is still written by this server, so downstream tools work unchanged).
-The `csst` backend needs vendored patches from `external/` and stays
-local-only. All other tool families (gravity, CMB, LSS, baryons, halos,
-IGM) currently run locally regardless of the dispatch setting.
 `get_dispatch` reports the site; `auth_status` reports facility sign-in
-(done via the hep-genesis auth CLIs or desktop app, plus Globus Connect
-Personal running locally). `set_dispatch("local")` switches back.
+(hep-genesis auth CLIs or desktop app). ALCF needs Globus Connect Personal
+on this host; NERSC is Globus-free (pure IRI). `set_dispatch("local")`
+switches back. Do NOT use this mode on shared/hosted deployments — one
+identity's credentials and allocation would serve every client.
+
+In both modes the `csst` backend stays local-only (it needs the vendored
+patches in `external/`, which pip cannot reproduce on a compute node), and
+all other tool families (gravity, CMB, LSS, baryons, halos, IGM) currently
+run locally regardless of the dispatch setting.
