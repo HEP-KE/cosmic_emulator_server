@@ -79,6 +79,11 @@ def export_dispatch_pack() -> dict:
         pip_deps = {b: list(d) for b, d in DISPATCH_PIP_DEPS.items()}
     except Exception:  # noqa: BLE001 — manifest stays useful without it
         pip_deps = {}
+    try:
+        from tools.halos.kernels import HMF_DISPATCH_PIP_DEPS
+        hmf_deps = {b: list(d) for b, d in HMF_DISPATCH_PIP_DEPS.items()}
+    except Exception:  # noqa: BLE001
+        hmf_deps = {}
 
     return {
         "dispatch_pack": {
@@ -97,6 +102,18 @@ def export_dispatch_pack() -> dict:
                     "base_pip_deps": ["numpy", "pydantic"],
                     "duration_hint_s": {"default": 600, "gokunemu": 1200},
                     "returns": "P(k) as a list, (Mpc/h)^3",
+                },
+                "hmf": {
+                    "function": "halos.kernels.compute_hmf",
+                    "args": {"backend": "miratitan|tinker08|sheth_tormen|press_schechter",
+                             "mass_def": "200c|200m|500c|fof",
+                             "cosmo": "{Ommh2, Ombh2, Omnuh2, n_s, h, sigma_8, w_0, w_a}",
+                             "masses": "[list of M in Msun/h]", "z": "float",
+                             "random_seed": "int (default 0)"},
+                    "pip_deps_by_backend": hmf_deps,
+                    "base_pip_deps": ["numpy", "pydantic"],
+                    "duration_hint_s": {"default": 900},
+                    "returns": "{dn_dlnM: [...], emulator_std: [...]}, (Mpc/h)^-3",
                 },
             },
             "usage": (

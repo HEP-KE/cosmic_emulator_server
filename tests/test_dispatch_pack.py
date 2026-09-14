@@ -35,9 +35,37 @@ def test_paths_are_safe_and_rooted():
 
 
 def test_manifest_matches_kernels():
+    from tools.halos.kernels import HMF_DISPATCH_PIP_DEPS
     from tools.pk.backends import DISPATCH_PIP_DEPS
 
-    pk = export_dispatch_pack()["dispatch_pack"]["kernels"]["pk"]
+    kernels = export_dispatch_pack()["dispatch_pack"]["kernels"]
+    pk = kernels["pk"]
     assert pk["function"] == "pk.backends.compute_pk"
     assert pk["pip_deps_by_backend"] == {b: list(d) for b, d in DISPATCH_PIP_DEPS.items()}
     assert "numpy" in pk["base_pip_deps"]
+    hmf = kernels["hmf"]
+    assert hmf["function"] == "halos.kernels.compute_hmf"
+    assert hmf["pip_deps_by_backend"] == {b: list(d) for b, d in HMF_DISPATCH_PIP_DEPS.items()}
+    files = export_dispatch_pack()["dispatch_pack"]["files"]
+    assert "tools/halos/kernels.py" in files
+
+
+def test_hmf_kernel_matches_wrapper_locally(tmp_path):
+    """The kernel/wrapper split must be behavior-preserving: the tool's local
+    path produces the same numbers as before (kernel called in-process)."""
+    import csv
+
+    from tools.halos import compute_hmf
+
+    res = compute_hmf(output_dir=str(tmp_path), backend="tinker08",
+                      mass_def="200c", n_masses=5, return_data=True)
+    assert res.status == "success"
+    assert res.metadata["computed_on"] == "local"
+    data = res.metadata["data"]
+    assert len(data["dn_dlnM_h3_Mpc3"]) == 5
+    # metadata.data is display-rounded (tiny values round to 0) — the real
+    # positivity check uses the unrounded stats.
+    assert res.metadata["stats"]["min_dn_dlnM"] > 0
+    with open(res.files[0]) as fh:
+        rows = [r for r in csv.reader(fh) if r and not r[0].startswith("#")]
+    assert len(rows) == 6  # header + 5 masses

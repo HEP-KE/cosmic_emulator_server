@@ -17,45 +17,31 @@ __all__ = ["compute_hmf", "predict_cluster_gas_params"]
 
 # colossus model names for the theory backends; press74/sheth99 are
 # friends-of-friends multiplicity functions (colossus requires mdef='fof'),
-# tinker08 is calibrated for spherical-overdensity definitions.
-_THEORY_MODELS = {"tinker08": "tinker08", "sheth_tormen": "sheth99",
-                  "press_schechter": "press74"}
+# Kernel/wrapper split (dispatch contract R1): the computation lives in
+# kernels.py so it can run on an HPC compute node; this module keeps the
+# files, labels, and metadata wherever the server runs.
+from .kernels import HMF_DISPATCH_PIP_DEPS
+from .kernels import compute_hmf as _hmf_kernel
 
 
-def _theory_hmf(backend, mass_def, cosmo, masses, z):
-    from colossus.cosmology import cosmology as ccosmo
-    from colossus.lss import mass_function
-
-    h = cosmo["h"]
-    params = {"flat": True, "H0": h * 100,
-              "Om0": cosmo["Ommh2"] / h**2, "Ob0": cosmo["Ombh2"] / h**2,
-              "sigma8": cosmo["sigma_8"], "ns": cosmo["n_s"]}
-    if cosmo["w_0"] != -1.0 or cosmo["w_a"] != 0.0:
-        params.update(de_model="w0wa", w0=cosmo["w_0"], wa=cosmo["w_a"])
-    name = f"hmf_{param_slug(params)}"
-    # persistence='' stops colossus writing interpolation tables to
-    # $HOME/.colossus — read-only under the production systemd sandbox
-    # (same failure class as the PyBird cache); in-memory caching still works
-    ccosmo.setCosmology(name, params, persistence="")
-
-    model = _THEORY_MODELS[backend]
-    if model in ("press74", "sheth99"):
-        if mass_def != "fof":
-            raise ValueError(
-                f"{backend} is a friends-of-friends multiplicity function; "
-                "call it with mass_def='fof'. For an apples-to-apples "
-                "comparison against the Mira-Titan emulator (M200c), use "
-                "backend='tinker08' with mass_def='200c' — evaluating an "
-                "FoF-calibrated fit at an SO mass is the classic way to get "
-                "a spurious factor-of-a-few discrepancy.")
-        mdef = "fof"
-    else:
-        mdef = mass_def
-        if mdef == "fof":
-            raise ValueError("tinker08 is SO-calibrated; use mass_def "
-                             "'200c', '200m', or '500c'.")
-    return mass_function.massFunction(masses, z, mdef=mdef, model=model,
-                                      q_out="dndlnM")
+def _validate_hmf_args(backend: str, mass_def: str) -> None:
+    """Cheap argument checks BEFORE dispatch — a bad combination must fail in
+    milliseconds here, not minutes into a facility job."""
+    if backend == "miratitan" and mass_def != "200c":
+        raise ValueError("The Mira-Titan emulator provides M200c only; "
+                         "use backend='tinker08' for other SO "
+                         "definitions ('200m', '500c').")
+    if backend in ("press_schechter", "sheth_tormen") and mass_def != "fof":
+        raise ValueError(
+            f"{backend} is a friends-of-friends multiplicity function; "
+            "call it with mass_def='fof'. For an apples-to-apples "
+            "comparison against the Mira-Titan emulator (M200c), use "
+            "backend='tinker08' with mass_def='200c' — evaluating an "
+            "FoF-calibrated fit at an SO mass is the classic way to get "
+            "a spurious factor-of-a-few discrepancy.")
+    if backend == "tinker08" and mass_def == "fof":
+        raise ValueError("tinker08 is SO-calibrated; use mass_def "
+                         "'200c', '200m', or '500c'.")
 
 
 @validate_call
@@ -97,28 +83,33 @@ def compute_hmf(
     cosmo = {"Ommh2": Ommh2, "Ombh2": Ombh2, "Omnuh2": Omnuh2,
              "n_s": n_s, "h": h, "sigma_8": sigma_8, "w_0": w_0, "w_a": w_a}
     masses = np.logspace(log10_M_min, log10_M_max, n_masses)
+    _validate_hmf_args(backend, mass_def)
+
+    from mcp_server.dispatch import remote_site, run_kernel  # lazy: server-only
+
+    site = remote_site()
+    if site:
+        result = run_kernel(
+            "halos.kernels.compute_hmf",
+            {"backend": backend, "mass_def": mass_def, "cosmo": cosmo,
+             "masses": masses.tolist(), "z": z, "random_seed": random_seed},
+            pip_deps=["numpy", "pydantic"] + HMF_DISPATCH_PIP_DEPS[backend],
+            duration=900,
+        )
+        out = result["result"]
+        hmf = np.asarray(out["dn_dlnM"], dtype=float)
+        err = np.asarray(out["emulator_std"], dtype=float)
+        computed_on = result.get("host", site)
+    else:
+        out = _hmf_kernel(backend, mass_def, cosmo, masses, z, random_seed)
+        hmf = np.asarray(out["dn_dlnM"], dtype=float)
+        err = np.asarray(out["emulator_std"], dtype=float)
+        computed_on = "local"
 
     if backend == "miratitan":
-        import MiraTitanHMFemulator
-        if mass_def != "200c":
-            raise ValueError("The Mira-Titan emulator provides M200c only; "
-                             "use backend='tinker08' for other SO "
-                             "definitions ('200m', '500c').")
-        emu = get_cached("miratitan_hmf", MiraTitanHMFemulator.Emulator)
-        with quiet():
-            # the emulator's error estimate uses np.random draws internally;
-            # seed for bitwise-reproducible outputs (provenance/caching)
-            np.random.seed(random_seed)
-            hmf_mean, hmf_err = emu.predict(cosmo, z, masses)
-        hmf = np.ravel(np.asarray(hmf_mean))
-        err = np.ravel(np.asarray(hmf_err))
         base_label = f"Mira-Titan HMF z={z:g}"
         err_note = "emulator_std is the GP 1-sigma uncertainty"
     else:
-        with quiet():
-            hmf = np.ravel(np.asarray(_theory_hmf(backend, mass_def, cosmo,
-                                                  masses, z)))
-        err = np.zeros_like(hmf)
         base_label = f"{backend} ({mass_def}) HMF z={z:g}"
         err_note = ("analytic fit - emulator_std column is 0; typical "
                     "calibration accuracy ~5-10% (tinker08) or worse "
@@ -139,6 +130,7 @@ def compute_hmf(
                f"random_seed: {random_seed}"])
     metadata = {"backend": backend, "mass_def": mass_def, "cosmology": cosmo,
                 "z": z, "random_seed": random_seed,
+                "computed_on": computed_on,
                 "units": {"M": f"{mass_def}, Msun/h",
                           "dn/dlnM": "(Mpc/h)^-3"},
                 "uncertainty_note": err_note,
@@ -149,7 +141,9 @@ def compute_hmf(
         status="success", files=[str(path)],
         message=f"Computed dn/dlnM ({backend}, {mass_def}) for {n_masses} "
                 f"masses 1e{log10_M_min:g}..1e{log10_M_max:g} Msun/h at "
-                f"z={z:g}.",
+                f"z={z:g}"
+                + (f", on {computed_on}" if computed_on != "local" else "")
+                + ".",
         metadata=metadata,
     )
 
