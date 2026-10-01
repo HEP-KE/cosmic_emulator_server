@@ -27,6 +27,11 @@ credentials and allocation would serve every client.
 
 State is process-local and read at call time, so an agent can flip sites
 per message. Nothing here imports hep_genesis until a remote site is chosen.
+
+Tool names (set_dispatch, get_dispatch, auth_status, export_dispatch_pack)
+are a cross-server convention shared with the spectra/gaia servers and
+matched by name in the hep-genesis harness (HPC gating, report bundling) —
+do not rename them; disambiguate in the docstrings instead.
 """
 
 import os
@@ -45,7 +50,7 @@ _PACK_MAX_BYTES = 10 * 1024 * 1024
 
 
 def export_dispatch_pack() -> dict:
-    """Hand this server's compute kernels to the CLIENT for HPC dispatch.
+    """Hand THIS emulator server's compute kernels to the client for HPC runs.
 
     Returns the ``tools/`` kernels package as in-band text files plus a
     manifest (kernel entry points, per-backend pip requirements for the
@@ -113,7 +118,7 @@ def export_dispatch_pack() -> dict:
                     "pip_deps_by_backend": hmf_deps,
                     "base_pip_deps": ["numpy", "pydantic"],
                     "duration_hint_s": {"default": 900},
-                    "returns": "{dn_dlnM: [...], emulator_std: [...]}, (Mpc/h)^-3",
+                    "returns": "{dn_dlnM: [...], emulator_std: [...]}, dn_dlnM in (Mpc/h)^-3; emulator_std is RELATIVE (fractional)",
                 },
             },
             "usage": (
@@ -194,9 +199,11 @@ def run_kernel(function: str, args: dict, pip_deps: list[str] | None = None,
 
 
 def set_dispatch(site: str, artifact_dir: str | None = None) -> str:
-    """Set where compute-heavy tools execute: 'local' (this machine),
-    'polaris' (ALCF) or 'perlmutter' (NERSC).
+    """Set where THIS emulator server's compute tools execute: 'local'
+    (this machine), 'polaris' (ALCF) or 'perlmutter' (NERSC).
 
+    Affects only this server's P(k) and HMF tools — never other servers'
+    dispatch state.
     Remote sites run each compute call as one facility job (staging + queue +
     walltime: minutes, not seconds) and need facility sign-in — check with
     auth_status. Light tools (plots, filters on existing files) always run
@@ -238,7 +245,7 @@ def set_dispatch(site: str, artifact_dir: str | None = None) -> str:
 
 
 def get_dispatch() -> str:
-    """Report where compute-heavy tools currently execute."""
+    """Report where THIS emulator server's compute tools currently execute."""
     site = _state["site"]
     if site == "local":
         return "Dispatch: local execution."
@@ -246,10 +253,12 @@ def get_dispatch() -> str:
 
 
 def auth_status() -> str:
-    """Report facility sign-in state for HPC dispatch (ALCF and NERSC).
+    """Report the facility sign-in state THIS emulator server sees for its
+    own HPC dispatch (ALCF and NERSC).
 
-    Call this before dispatching remotely, or when a remote call fails with
-    an auth error. Sign-in happens outside this server (hep-genesis auth
+    Call this before set_dispatch to a remote site, or when one of this
+    server's remote calls fails with an auth error. It says nothing about
+    the facility servers' own tokens — ask those servers directly. Sign-in happens outside this server (hep-genesis auth
     CLIs or the desktop app's HPC panel); tokens are re-read on every call,
     so a fresh sign-in is picked up without restarting this server.
     """

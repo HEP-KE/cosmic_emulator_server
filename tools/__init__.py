@@ -11,4 +11,5 @@ functions exposed as MCP tools:
 - tools.baryons  : baryonic suppression + hydro subgrid emulation
 - tools.halos    : halo mass function + cluster gas models
 - tools.igm      : Lyman-alpha forest P1D
+- tools.analysis : figures from any output CSVs + batched parameter scans
 """

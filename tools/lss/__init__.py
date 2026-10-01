@@ -112,7 +112,11 @@ def compute_lensing_cls(
     n_ell: Annotated[int, Field(ge=5, le=200)] = 50,
     return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
-    """Compute weak-lensing convergence angular power spectrum with jax-cosmo.
+    """Compute the cosmic-shear (galaxy weak-lensing) convergence Cl with jax-cosmo.
+
+    Not CMB lensing — for the CMB lensing potential use compute_cmb_cls
+    with spectrum="PP". For z_source or cosmology sweeps (e.g. Fisher
+    finite differences) use scan_emulator_parameters.
 
     Limber-approximation cosmic-shear Cl for a single Smail n(z) source bin
     (a=2, b=2, z0 tuned so <z> ~ z_source). Fully differentiable backend;

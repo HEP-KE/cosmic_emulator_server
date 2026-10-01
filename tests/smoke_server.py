@@ -56,8 +56,8 @@ async def run(session: ClientSession):
     # --- discovery
     await call(s, "list_emulators", {})
     await call(s, "describe_emulator", {"name": "gokunemu"})
-    await call(s, "list_skills", {})
-    await call(s, "load_skill", {"name": "baryon-budget"})
+    await call(s, "list_emulator_skills", {})
+    await call(s, "load_emulator_skill", {"name": "baryon-budget"})
     await call(s, "convert_cosmology", {"sigma8": 0.81})
 
     # --- pk family + chaining
@@ -72,8 +72,8 @@ async def run(session: ClientSession):
     await call(s, "compute_nonlinear_pk",
                {"output_dir": OUT, "backend": "miratitan", "sigma8": 0.8})
     if nl1 and nl2:
-        await call(s, "plot_pk_comparison",
-                   {"spectrum_files": [nl1["files"][0], nl2["files"][0]],
+        await call(s, "plot_emulator_curves",
+                   {"curve_files": [nl1["files"][0], nl2["files"][0]],
                     "output_dir": OUT})
 
     # --- gravity
@@ -86,8 +86,8 @@ async def run(session: ClientSession):
     c1 = await call(s, "compute_cmb_cls",
                     {"output_dir": OUT, "spectrum": "TT", "backend": "capse"})
     if c1:
-        await call(s, "plot_cmb_spectra",
-                   {"spectrum_files": [c1["files"][0]], "output_dir": OUT})
+        await call(s, "plot_emulator_curves",
+                   {"curve_files": [c1["files"][0]], "output_dir": OUT})
 
     # --- lss (the chain that once broke under the sandbox)
     if lin:
@@ -120,9 +120,13 @@ async def run(session: ClientSession):
 
     # --- guardrails must guard
     if nl1 and sup:
-        await call(s, "plot_pk_comparison",
-                   {"spectrum_files": [nl1["files"][0], sup["files"][0]],
+        await call(s, "plot_emulator_curves",
+                   {"curve_files": [nl1["files"][0], sup["files"][0]],
                     "output_dir": OUT}, expect_error=True)
+    await call(s, "scan_emulator_parameters",
+               {"tool": "compute_baryon_suppression", "output_dir": OUT,
+                "scan": {"z": [0.0, 0.5, 1.0]},
+                "fixed_args": {"model": "syren_IllustrisTNG"}})
 
 
 async def main():

@@ -1,6 +1,6 @@
 ---
 name: baryon-budget
-description: Build a baryonic-feedback error budget — compare P(k) suppression across SP(k), bacco, and four CAMELS hydro suites, and connect feedback strength to CRK-HACC subgrid predictions with GP uncertainties
+description: Baryonic-feedback error budget — compare the hydro-simulation P(k) suppression S(k) across SP(k), bacco and four CAMELS suites (TNG, Astrid, SIMBA, EAGLE), sweep feedback strength, and connect it to CRK-HACC subgrid-physics predictions (gas fractions, stellar mass function) with GP uncertainties
 ---
 
 # Baryonic feedback budget recipe
@@ -11,15 +11,24 @@ quantities.
 
 ## Part 1: suppression spread
 
-1. Call `compute_baryon_suppression` for:
-   - `model="spk"` (defaults are a BAHAMAS-like fb; SP(k)'s fb is in units
-     of Omega_b/Omega_m — say so if the user supplies numbers)
-   - `model="bacco"` (defaults ~ moderate feedback)
-   - all four CAMELS suites: `syren_IllustrisTNG`, `syren_Astrid`,
-     `syren_SIMBA`, `syren_Swift_EAGLE` at the same A_SN/A_AGN (1.0 each =
-     fiducial)
-2. Plot all files with `plot_pk_comparison` (no ratio panel needed —
-   suppression curves are already ratios; pick any `reference_index`).
+1. One call: `scan_emulator_parameters(tool="compute_baryon_suppression",
+   scan={"model": ["spk", "bacco", "syren_IllustrisTNG", "syren_Astrid",
+   "syren_SIMBA", "syren_Swift_EAGLE"]}, fixed_args={cosmology,
+   "k_min": 0.1, "k_max": 4.9, "n_points": 200})`. Notes:
+   - spk defaults are a BAHAMAS-like fb; SP(k)'s fb is in units of
+     Omega_b/Omega_m — say so if the user supplies numbers. SP(k) is
+     calibrated for k >= 0.1 h/Mpc.
+   - bacco defaults ~ moderate feedback; bacco stops at k = 4.9 h/Mpc and
+     z = 1.5 (pass a lower k_max for the whole scan, not per model).
+   - the four CAMELS suites run at the same A_SN/A_AGN (1.0 each =
+     fiducial).
+   Add `"z": [0, 0.5, 1]` to the scan for redshift evolution — but not with
+   spk at fixed fb (its z-trend is an artifact; see the tool's note).
+2. The scan returns a figure; for a paper version re-plot the files with
+   `plot_emulator_curves` and short `labels` (e.g. ["SP(k)", "BACCO",
+   "TNG", "Astrid", "SIMBA", "EAGLE"]). Feedback-strength sweeps (bacco
+   `log10_M_c` 13-15, or spk `fb_a`) are one more scan each and plot with a
+   colorbar automatically.
 3. Report per model: maximum suppression (%) and the k where it occurs,
    plus the **envelope** — the min/max suppression across models at k = 1,
    5, 8 h/Mpc. The envelope IS the current theory uncertainty; SIMBA is
@@ -29,13 +38,24 @@ quantities.
 
 If the user wants to know what feedback does besides suppress P(k):
 
-1. `emulate_subgrid_statistic` with `statistic="Pk"` at weak
-   (v_kin=0.2, e_kin=0.1) and strong (v_kin=1.0, e_kin=1.0) AGN settings.
-2. Repeat for `"GSMF"` and `"fGas"` at the same two settings — show that
-   the parameters that kill small-scale power also suppress massive
-   galaxies and expel cluster gas.
+1. `scan_emulator_parameters(tool="emulate_subgrid_statistic",
+   combine="zip", scan={"v_kin": [0.2, 1.0], "e_kin": [0.1, 1.0]},
+   fixed_args={"statistic": "Pk"})` — weak vs strong AGN in one call.
+2. Repeat with `"statistic": "GSMF"` and `"fGas"` — show that the
+   parameters that kill small-scale power also suppress massive galaxies
+   and expel cluster gas.
 3. Always mention the `gp_std` column: these are GP emulators with honest
    uncertainties; differences smaller than gp_std are not significant.
+
+Comparing CRK-HACC to the Part 1 models:
+- The x-axis is the FIRST CSV column, in real units (Pk: k in h/Mpc on
+  the emulator's native 255-point grid, 0.07-12.5; fGas: halo mass; GSMF:
+  stellar mass) — `metadata.x_axis` names it. Never reconstruct a grid by
+  hand: a guessed grid once shifted S(k) by up to ~7x in k and
+  reversed a published conclusion.
+- The emulator is at its fixed training cosmology; evaluate the other
+  models at that cosmology too, compare only on the overlapping k range,
+  and quote S at the same physical k from each model.
 
 ## Composing with gravity-only P(k)
 

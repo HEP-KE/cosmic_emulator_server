@@ -77,17 +77,21 @@ def create_server(*, host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
             enable_dns_rebinding_protection=False)
 
     instructions = (
-        "Production cosmological-emulator server: matter power spectra "
-        "(6 backends), modified gravity (f(R), nDGP, cubic Galileon), CMB "
-        "Cls, EFTofLSS galaxy multipoles, weak-lensing Cls, baryonic "
-        "feedback, halo mass function, cluster gas, and Lyman-alpha P1D. "
-        "Start with list_emulators to discover capabilities and "
-        "describe_emulator for valid parameter ranges — every emulator has "
-        "a hard training box. The server also carries skills (named "
-        "multi-tool recipes): call list_skills, and when a task matches "
-        "one, load_skill and follow it. Units: k in h/Mpc and P(k) in (Mpc/h)^3 "
-        "everywhere except Lyman-alpha tools (comoving Mpc, no h); CMB "
-        "spectra are Dl in muK^2. Tools that write files accept an "
+        "Production cosmological-emulator server: theory PREDICTIONS (not "
+        "simulation measurements) for matter power spectra (7 backends), "
+        "modified gravity (f(R), nDGP, cubic Galileon), CMB Cls, EFTofLSS "
+        "galaxy multipoles, weak-lensing Cls, baryonic feedback, halo mass "
+        "function, cluster gas, and Lyman-alpha P1D. Start with "
+        "list_emulators to discover capabilities and describe_emulator for "
+        "valid parameter ranges — every emulator has a hard training box. "
+        "For sweeps over a parameter (redshift, feedback strength, "
+        "finite-difference steps) use scan_emulator_parameters instead of "
+        "many single calls; plot any outputs with plot_emulator_curves. "
+        "The server also carries skills (named multi-tool recipes): call "
+        "list_emulator_skills, and when a task matches one, "
+        "load_emulator_skill and follow it. Units: k in h/Mpc and P(k) in "
+        "(Mpc/h)^3 everywhere except Lyman-alpha tools (comoving Mpc, no h); "
+        "CMB spectra are Dl in muK^2. Tools that write files accept an "
         "output_dir argument and return structured artifact metadata; pass "
         "file paths between tools, never raw arrays."
     )
@@ -124,7 +128,7 @@ def create_server(*, host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
 def register_skill_prompts(mcp: FastMCP) -> None:
     """Expose every skills/*.md file as a native MCP prompt.
 
-    The skills are primarily served through the list_skills / load_skill
+    The skills are primarily served through the list_emulator_skills / load_emulator_skill
     tools (which every MCP client supports); registering them as prompts as
     well lets prompt-capable clients surface the same recipes in their UI
     with zero tool calls.

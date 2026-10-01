@@ -12,7 +12,7 @@ from pydantic import Field, validate_call
 
 from ..common import (ArtifactResult, downsample_columns, get_cached, k_grid,
                       param_slug, quiet, resolve_outdir, summary_stats,
-                      write_csv)
+                      unity_crossings, write_csv)
 from ..pk import backends as pk_backends
 
 # Per-model training boxes (cosmology side; the MG parameter itself is
@@ -115,6 +115,9 @@ def compute_mg_boost(
 ) -> ArtifactResult:
     """Compute a modified-gravity power spectrum boost B(k) = P_MG / P_LCDM.
 
+    Returns only the dimensionless ratio; use compute_mg_pk for the MG P(k)
+    itself. For sweeps (several fR0 / z values) use scan_emulator_parameters.
+
     Models: "fofr" (Hu-Sawicki f(R), e-MANTIS, k 0.03-7 h/Mpc), "ndgp"
     (nDGPemu, k <= 5), "cubic_galileon" (SEPIA GP, k 0.02-12, returns a
     gp_std uncertainty column; the requested z snaps to the nearest of 51
@@ -149,7 +152,8 @@ def compute_mg_boost(
     meta = {"model": model, "mg_parameter": mg_par, "z": z,
             "in_training_box": in_box, "extrapolation_warnings": box_warnings,
             "units": {"k": "h/Mpc", "boost": "dimensionless"},
-            "stats": summary_stats(k, boost, "k", "boost")}
+            "stats": summary_stats(k, boost, "k", "boost"),
+            "unity_crossings_k": unity_crossings(k, boost)}
     if "snapshot_z" in extra:
         meta["snapshot_z_used"] = extra["snapshot_z"]
     if return_data:
@@ -187,7 +191,7 @@ def compute_mg_pk(
     Composes compute_mg_boost with a LCDM nonlinear backend from tools.pk
     (metadata records which baseline was used — quote it when reporting
     results). Output CSV: k [h/Mpc], P_MG [(Mpc/h)^3], boost. For plots, pass
-    the file to plot_pk_comparison together with a LCDM spectrum at the same
+    the file to plot_emulator_curves together with a LCDM spectrum at the same
     cosmology.
     """
     k = k_grid(k_min, k_max, n_points)

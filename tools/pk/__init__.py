@@ -1,5 +1,5 @@
-"""Matter power spectrum tools: linear and nonlinear P(k) from six backends,
-plus spectrum composition and comparison plotting."""
+"""Matter power spectrum tools: linear and nonlinear P(k) from seven
+backends, plus arithmetic composition of server CSVs."""
 
 import numpy as np
 from pathlib import Path
@@ -8,12 +8,11 @@ from typing import Annotated, Literal
 from pydantic import Field, validate_call
 
 from ..common import (ArtifactResult, downsample_columns, k_grid, param_slug,
-                      plot_curves, read_csv, resolve_outdir, summary_stats,
-                      varied_label, write_csv)
+                      read_csv, resolve_outdir, summary_stats,
+                      unity_crossings, varied_label, write_csv)
 from . import backends
 
-__all__ = ["compute_linear_pk", "compute_nonlinear_pk", "compose_spectra",
-           "plot_pk_comparison"]
+__all__ = ["compute_linear_pk", "compute_nonlinear_pk", "compose_spectra"]
 
 LinearBackend = Literal["camb", "syren", "baccoemu"]
 NonlinearBackend = Literal["camb_hmcode", "syren_halofit", "baccoemu",
@@ -24,6 +23,11 @@ _DEFAULTS = {"Om": 0.31, "Ob": 0.049, "h": 0.67, "ns": 0.965, "As": 2.1e-9,
 
 _SIGMA8_BACKENDS = {"syren", "syren_halofit", "baccoemu", "miratitan"}
 
+# Hard upper k-limits of the nonlinear emulators [h/Mpc]. Checked before the
+# call so the agent gets an actionable message, not an upstream traceback.
+NONLINEAR_K_MAX = {"baccoemu": 4.9, "euclidemu2": 9.4, "csst": 10.0,
+                   "gokunemu": 10.0}
+
 
 def _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa):
     return {"Om": Om, "Ob": Ob, "h": h, "ns": ns, "As": As,
@@ -32,6 +36,14 @@ def _params(Om, Ob, h, ns, As, sigma8, mnu, w0, wa):
 
 def _run(kind, backend, params, k, z, output_dir, return_data) -> ArtifactResult:
     from mcp_server.dispatch import remote_site, run_kernel  # lazy: server-only
+
+    k_limit = NONLINEAR_K_MAX.get(backend) if kind == "nonlinear" else None
+    if k_limit is not None and k[-1] > k_limit:
+        raise ValueError(
+            f"k_max={k[-1]:g} h/Mpc exceeds the {backend} emulator limit of "
+            f"{k_limit:g} h/Mpc. Lower k_max to <= {k_limit:g}, or use a "
+            "backend that reaches further (euclidemu2 9.4, csst/gokunemu 10, "
+            "camb_hmcode/syren_halofit unrestricted).")
 
     site = remote_site()
     if site:
@@ -168,7 +180,7 @@ def compute_nonlinear_pk(
     compared; each response then reports in_training_box for the specific
     backend and lists any extrapolation warnings — check them before using
     the numbers. Running several backends at one cosmology and comparing
-    with plot_pk_comparison is the recommended production cross-check.
+    with plot_emulator_curves is the recommended production cross-check.
     Output: k [h/Mpc], P(k) [(Mpc/h)^3].
 
     When dispatch is set to an HPC site (set_dispatch tool), the backend
@@ -195,10 +207,13 @@ def compose_spectra(
     gravity-only nonlinear P(k) by a baryonic suppression, or divide two
     P(k) files to get their ratio ("divide" and "ratio" are synonyms).
     Later files are interpolated onto the FIRST file's k-grid; the overlap
-    must cover at least half of that grid, otherwise the call errors.
+    must cover at least half of that grid, and inputs recorded at different
+    redshifts are refused (recompute at a common z), otherwise the call errors.
     Provenance (input files, their quantities and labels) is written into
-    the output header and metadata. Use this instead of ever multiplying
-    numbers client-side.
+    the output header and metadata. For dimensionless results (boost x
+    suppression, ratios) metadata.unity_crossings_k lists the k where the
+    result crosses 1 — e.g. where an MG boost and baryonic suppression
+    cancel. Use this instead of ever multiplying numbers client-side.
     """
     curves = []
     for path_str in spectrum_files:
@@ -208,6 +223,14 @@ def compose_spectra(
                        "x": cols[names[0]], "y": cols[names[1]],
                        "quantity": header.get("quantity", "unknown"),
                        "label": header.get("label", Path(path_str).stem)})
+
+    # B(z=0) x S(z=0.5) is always a bug, and nothing downstream can tell.
+    redshifts = {c["path"]: c["header"]["z"] for c in curves if "z" in c["header"]}
+    if len({float(z) for z in redshifts.values()}) > 1:
+        listing = "; ".join(f"{Path(p).name}: z={z}" for p, z in redshifts.items())
+        raise ValueError(f"Inputs are at different redshifts ({listing}). "
+                         "Recompute them at a common z before composing.")
+    shared_z = next(iter(redshifts.values()), None)
 
     x = curves[0]["x"]
     result = np.array(curves[0]["y"], dtype=float)
@@ -226,8 +249,27 @@ def compose_spectra(
     quantities = [c["quantity"] for c in curves]
     opname = {"multiply": "x", "divide": "/", "ratio": "/"}[op]
     label = f" {opname} ".join(c["label"] for c in curves)
-    out_q = ("ratio" if op in ("divide", "ratio")
-             else quantities[0] if len(set(quantities)) == 1 else "composed")
+    # Dimensionless factors (B, S, ratios) don't change what a quantity is:
+    # P(k) x S(k) is still a power spectrum; B(k) x S(k) is a pure ratio.
+    dimensionless = {"boost", "suppression", "ratio", "composed"}
+    dimensional = [i for i, q in enumerate(quantities) if q not in dimensionless]
+    if op in ("divide", "ratio"):
+        out_q, value_units = "ratio", "dimensionless"
+    elif not dimensional:
+        out_q = quantities[0] if len(set(quantities)) == 1 else "composed"
+        value_units = "dimensionless"
+    elif len(dimensional) == 1:
+        out_q = quantities[dimensional[0]]
+        units = curves[dimensional[0]]["header"].get("units", "")
+        value_units = units.split(",")[-1].strip() if "," in units else "input units"
+    else:
+        out_q, value_units = "composed_product", "product of input units"
+
+    symbol_of = {"boost": "B(k)", "suppression": "S(k)"}
+    symbol = None
+    if all(q in symbol_of for q in quantities):
+        joiner = r"\," if op == "multiply" else "/"
+        symbol = joiner.join(symbol_of[q] for q in quantities)
 
     stem = output_name or f"composed_{param_slug({'f': tuple(spectrum_files), 'op': op})}"
     outdir = resolve_outdir(output_dir)
@@ -235,8 +277,9 @@ def compose_spectra(
     columns = {"k_h_per_Mpc": x[keep], "value": result[keep]}
     write_csv(path, columns,
               [f"label: {label}", f"quantity: {out_q}",
-               "units: k [h/Mpc], value [product of input units]",
-               f"op: {op}"] +
+               f"units: k [h/Mpc], value [{value_units}]",
+               f"op: {op}"] + ([f"symbol: {symbol}"] if symbol else []) +
+              ([f"z: {shared_z}"] if shared_z is not None else []) +
               [f"input{i}: {c['path']} ({c['quantity']})"
                for i, c in enumerate(curves)])
     metadata = {"op": op, "inputs": [{"file": c["path"],
@@ -244,6 +287,8 @@ def compose_spectra(
                                       "label": c["label"]} for c in curves],
                 "output_quantity": out_q,
                 "stats": summary_stats(x[keep], result[keep], "k", "value")}
+    if out_q in dimensionless:
+        metadata["unity_crossings_k"] = unity_crossings(x[keep], result[keep])
     if return_data:
         metadata["data"] = downsample_columns(columns)
     return ArtifactResult(
@@ -251,56 +296,3 @@ def compose_spectra(
         message=f"Composed {len(curves)} files with '{op}' on "
                 f"{int(keep.sum())} shared k-points.",
         metadata=metadata)
-
-
-@validate_call
-def plot_pk_comparison(
-    spectrum_files: Annotated[list[str], Field(min_length=1, max_length=8)],
-    output_dir: Annotated[str, Field(min_length=1)],
-    reference_index: Annotated[int, Field(ge=0)] = 0,
-    title: str = "Comparison",
-    allow_mixed_quantities: Annotated[bool, Field(description="Set true to deliberately overlay different quantities (e.g. a boost on top of spectra). Default false: mixing errors out.")] = False,
-    output_name: Annotated[str | None, Field(description="Optional output file stem (default derives from the inputs).")] = None,
-) -> ArtifactResult:
-    """Plot curves from CSVs written by this server's tools, with a ratio panel.
-
-    Refuses to overlay files of different `quantity` (power_spectrum vs
-    suppression vs hmf vs cl ...) unless allow_mixed_quantities=true —
-    mixed-axis plots are usually a bug, and axis labels come from the
-    files' own unit headers. reference_index selects the ratio-panel
-    denominator.
-    """
-    if reference_index >= len(spectrum_files):
-        raise ValueError("reference_index is out of range for spectrum_files.")
-
-    headers = [read_csv(f)[0] for f in spectrum_files]
-    quantities = [h.get("quantity", "unknown") for h in headers]
-    variants = {h.get("variant") for h in headers if h.get("variant")}
-    if len(set(quantities)) > 1 and not allow_mixed_quantities:
-        listing = "; ".join(f"{Path(f).name}: {q}"
-                            for f, q in zip(spectrum_files, quantities))
-        raise ValueError(
-            f"Refusing to overlay different quantities ({listing}). "
-            "Pass allow_mixed_quantities=true only if this is intentional.")
-
-    units = headers[0].get("units", "")
-    ylabel = units.split(",")[-1].strip() if "," in units else quantities[0]
-    xlabel = units.split(",")[0].strip() if "," in units else "x"
-    logy = quantities[0] in ("power_spectrum", "hmf", "cl", "multipoles", "p1d",
-                             "unknown", "composed")
-
-    outdir = resolve_outdir(output_dir)
-    stem = output_name or f"comparison_{param_slug({'f': tuple(spectrum_files)})}"
-    path = outdir / f"{stem}.png"
-    labels = plot_curves(spectrum_files, path, title=title, ylabel=ylabel,
-                         xlabel=xlabel, logy=logy,
-                         ratio_reference=reference_index)
-    message = f"Plotted {len(labels)} curves (ratio vs {labels[reference_index]})."
-    metadata = {"labels": labels, "quantities": quantities}
-    if len(variants) > 1:
-        note = (f"inputs mix spectrum variants {sorted(variants)} — "
-                "e.g. linear vs nonlinear; ensure this comparison is intended")
-        message += f" NOTE: {note}."
-        metadata["variant_warning"] = note
-    return ArtifactResult(status="success", files=[str(path)],
-                          message=message, metadata=metadata)

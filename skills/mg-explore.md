@@ -1,6 +1,6 @@
 ---
 name: mg-explore
-description: Explore modified-gravity signatures — f(R), nDGP, or cubic Galileon power spectrum boosts, parameter sweeps, and composed P(k) against the LCDM baseline
+description: Explore modified-gravity signatures — f(R) (Hu-Sawicki), nDGP or cubic Galileon power-spectrum boosts B(k), sweeps in MG strength and redshift, and composed P(k) against the LCDM baseline
 ---
 
 # Modified-gravity explorer recipe
@@ -17,18 +17,24 @@ emulators, with correct composition against a LCDM baseline.
 | `cubic_galileon` | `f_phi` | Galileon dark-energy fraction (larger = stronger) | 0.02-1.0 |
 
 All three share a cosmology box around Om in [0.24, 0.39] — check
-`describe_emulator` before unusual values.
+`describe_emulator` before unusual values. k coverage differs: fofr 0.03-7,
+ndgp <= 5, cubic_galileon 0.02-12 h/Mpc; use `k_min=0.03, k_max=4.9` when
+models will be overlaid or composed with baryons.
 
 ## Workflow
 
 1. Ask which model(s) and strength(s) if not stated; otherwise show one
    moderate case per model (fR0=1e-5, H0rc=1, f_phi=0.5).
-2. **Single model:** `compute_mg_boost` at 2-3 parameter values, z=0 (and
-   z=1 if the user cares about evolution); plot the boost files together
-   with `plot_pk_comparison` (`reference_index` on the weakest case).
+2. **Single model:** one `scan_emulator_parameters` call with
+   `tool="compute_mg_boost"`, e.g. `scan={"minus_log10_fR0": [4, 5, 6]}`
+   (add `"z": [0, 1]` if the user cares about evolution) — it returns all
+   boost files, their unity crossings, and a figure. For a hand-made
+   overlay use `plot_emulator_curves` with short `labels` (e.g. "F4").
 3. **Observable-level:** `compute_mg_pk` (records the LCDM baseline in
    metadata — always quote it), and optionally a plain
    `compute_nonlinear_pk` at the same cosmology to overlay MG vs LCDM.
+   With baryons (degeneracy, cancellation scales, robustness across
+   feedback models): load the mg-baryon-degeneracy skill.
 4. Report: peak deviation (% and the k where it happens), the k-range above
    1% deviation, and — for cubic_galileon — the GP uncertainty from the
    `gp_std` column and the snapshot z actually used (`snapshot_z_used` in

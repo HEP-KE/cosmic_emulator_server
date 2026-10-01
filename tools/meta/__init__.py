@@ -9,7 +9,50 @@ from .registry import EMULATORS
 from .skills import skill_index, skill_text
 
 __all__ = ["list_emulators", "describe_emulator", "convert_cosmology",
-           "list_skills", "load_skill"]
+           "list_emulator_skills", "load_emulator_skill"]
+
+# Names agents reach for (the tools' backend/model arguments, package names,
+# simulation-suite names) -> registry keys. Seen in practice: 'spk',
+# 'crk_hacc_subgrid'. Keys are normalized (lowercase, '-' -> '_').
+ALIASES = {
+    "spk": "pyspk", "sp(k)": "pyspk",
+    "bacco": "baccoemu", "bacco_baryons": "baccoemu",
+    "syren_illustristng": "syren_baryon", "syren_astrid": "syren_baryon",
+    "syren_simba": "syren_baryon", "syren_swift_eagle": "syren_baryon",
+    "syren_halofit": "syren", "symbolic_pofk": "syren",
+    "camb_hmcode": "camb", "hmcode": "camb",
+    "fofr": "emantis", "f(r)": "emantis", "hu_sawicki": "emantis",
+    "ndgp": "ndgpemu", "galileon": "cubic_galileon",
+    "cubicgalileonemu": "cubic_galileon",
+    "subgrid": "subgrid_emu", "crk_hacc": "subgrid_emu",
+    "crk_hacc_subgrid": "subgrid_emu", "crkhacc": "subgrid_emu",
+    "tinker08": "colossus_hmf", "sheth_tormen": "colossus_hmf",
+    "press_schechter": "colossus_hmf", "colossus": "colossus_hmf",
+    "cosmopower": "cosmopower_jax", "jaxcapse": "capse",
+    "euclidemu": "euclidemu2", "goku": "gokunemu", "cemulator": "csst",
+    "cosmicemu": "cosmicemu_mt4", "mira_titan_pk": "cosmicemu_mt4",
+    "mira_titan_hmf": "miratitan_hmf", "lace_gp": "lace",
+}
+AMBIGUOUS = {"miratitan": ["cosmicemu_mt4 (nonlinear P(k))",
+                           "miratitan_hmf (halo mass function)"],
+             "mira_titan": ["cosmicemu_mt4 (nonlinear P(k))",
+                            "miratitan_hmf (halo mass function)"],
+             "syren_baryons": ["syren_baryon"]}
+
+
+def resolve_emulator_name(name: str) -> str:
+    key = name.strip().lower().replace("-", "_").replace(" ", "_")
+    if key in EMULATORS:
+        return key
+    if key in ALIASES:
+        return ALIASES[key]
+    if key in AMBIGUOUS:
+        raise ValueError(f"'{name}' is ambiguous — did you mean "
+                         f"{' or '.join(AMBIGUOUS[key])}?")
+    raise ValueError(
+        f"Unknown emulator '{name}'. Valid: {', '.join(sorted(EMULATORS))} "
+        "(tool backend/model names such as 'spk', 'bacco', 'fofr', "
+        "'tinker08' are accepted too).")
 
 
 @validate_call
@@ -41,7 +84,7 @@ def list_emulators(
 
 @validate_call
 def describe_emulator(
-    name: Annotated[str, Field(min_length=1, description="Emulator key from list_emulators, e.g. 'baccoemu'.")],
+    name: Annotated[str, Field(min_length=1, description="Emulator key from list_emulators (e.g. 'baccoemu', 'pyspk'), or the backend/model name a compute tool takes (e.g. 'spk', 'bacco', 'fofr', 'tinker08').")],
 ) -> ArtifactResult:
     """Full metadata for one emulator: parameter ranges, units, accuracy, citation.
 
@@ -49,14 +92,15 @@ def describe_emulator(
     emulators silently extrapolate (neural networks) or error (Gaussian
     processes) outside their training box.
     """
-    if name not in EMULATORS:
-        raise ValueError(
-            f"Unknown emulator '{name}'. Valid: {', '.join(sorted(EMULATORS))}")
+    key = resolve_emulator_name(name)
+    message = f"{key}: {EMULATORS[key]['role']}"
+    if key != name:
+        message = f"('{name}' resolves to '{key}') " + message
     return ArtifactResult(
         status="success",
         files=[],
-        message=f"{name}: {EMULATORS[name]['role']}",
-        metadata=EMULATORS[name],
+        message=message,
+        metadata=dict(EMULATORS[key], registry_key=key),
     )
 
 
@@ -135,29 +179,30 @@ def convert_cosmology(
 
 
 @validate_call
-def list_skills() -> ArtifactResult:
-    """List this server's skills: named recipes for multi-tool workflows.
+def list_emulator_skills() -> ArtifactResult:
+    """List this emulator server's skills: recipes for multi-tool workflows.
 
-    A skill is procedural know-how — which tools to combine, in what order,
-    with what parameters, and how to interpret the results. Returns one
-    name + description per skill; when a task matches one, call load_skill
-    and follow the loaded instructions.
+    A skill is procedural know-how — which emulator tools to combine, in
+    what order, with what parameters, and how to interpret the results.
+    Returns one name + description per skill; when a task matches one, call
+    load_emulator_skill and follow the loaded instructions. (These cover
+    this server's tools only; other servers' skills are separate.)
     """
     index = skill_index()
     return ArtifactResult(
         status="success",
         files=[],
-        message=f"{len(index)} skills available. Load one with load_skill "
-                "when a task matches its description.",
+        message=f"{len(index)} skills available. Load one with "
+                "load_emulator_skill when a task matches its description.",
         metadata={"skills": index},
     )
 
 
 @validate_call
-def load_skill(
-    name: Annotated[str, Field(min_length=1, description="Skill name from list_skills, e.g. 'pk-crosscheck'.")],
+def load_emulator_skill(
+    name: Annotated[str, Field(min_length=1, description="Skill name from list_emulator_skills, e.g. 'pk-crosscheck'.")],
 ) -> ArtifactResult:
-    """Load the full instructions of a named skill; then follow them.
+    """Load the full instructions of one of this emulator server's skills.
 
     Skills encode validated workflows over this server's tools (correct
     tool ordering, parameter choices, physical sanity checks, and how to

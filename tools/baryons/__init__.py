@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..common import (ArtifactResult, downsample_columns, get_cached, k_grid,
                       param_slug, quiet, read_csv, resolve_outdir,
-                      summary_stats, write_csv)
+                      summary_stats, unity_crossings, write_csv)
 
 __all__ = ["compute_baryon_suppression", "baryonify_pk",
            "emulate_subgrid_statistic"]
@@ -64,6 +64,9 @@ def compute_baryon_suppression(
     return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
     """Compute the baryonic suppression S(k) = P_hydro(k) / P_gravity-only(k).
+
+    Returns only the ratio; baryonify_pk applies it to a P(k) file. For
+    model x redshift grids use scan_emulator_parameters.
 
     Models parameterize feedback differently — only the matching parameter
     group is used:
@@ -126,7 +129,8 @@ def compute_baryon_suppression(
                f"model: {model}", f"z: {z:g}", f"detail: {detail}"])
     metadata = {"model": model, "detail": detail, "z": z,
                 "units": {"k": "h/Mpc", "suppression": "dimensionless"},
-                "stats": summary_stats(k, sup, "k", "S")}
+                "stats": summary_stats(k, sup, "k", "S"),
+                "unity_crossings_k": unity_crossings(k, sup)}
     if model == "spk":
         metadata["z_scan_note"] = ("fb parameters are z-independent inputs; "
                                    "a z-scan at fixed fb is not a physical "
@@ -224,6 +228,33 @@ def baryonify_pk(
     )
 
 
+# x-axis of each statistic, as stored in subgrid_emu's training data files
+# (data/<stat>_z_index<i>_y_ind.npy). The package's TRAINING_GRIDS metadata
+# disagrees with those files (and has no grid for Pk), so read the files.
+SUBGRID_X_AXES = {
+    "Pk": ("k_h_per_Mpc", "h/Mpc (CRK-HACC convention)"),
+    "GSMF": ("Mstar_Msun", "stellar mass, Msun"),
+    "BHMSM": ("Mstar_Msun", "stellar mass, Msun"),
+    "fGas": ("Mhalo_Msun", "halo mass, Msun"),
+    "CGD": ("r_scaled", "radius in units of the halo SO radius"),
+    "CSFR": ("scale_factor", "scale factor a"),
+}
+
+
+def _subgrid_x_axis(statistic: str, z_index: int, n: int):
+    import os
+    import subgrid_emu
+
+    path = os.path.join(os.path.dirname(subgrid_emu.__file__), "data",
+                        f"{statistic}_z_index{z_index}_y_ind.npy")
+    if os.path.exists(path):
+        x = np.ravel(np.load(path)).astype(float)
+        if len(x) == n:
+            name, units = SUBGRID_X_AXES[statistic]
+            return x, name, units
+    return np.arange(n, dtype=float), "grid_index", "index (x-grid unavailable)"
+
+
 @validate_call
 def emulate_subgrid_statistic(
     output_dir: Annotated[str, Field(min_length=1)],
@@ -238,17 +269,22 @@ def emulate_subgrid_statistic(
 ) -> ArtifactResult:
     """Emulate a CRK-HACC hydro-simulation summary statistic vs subgrid parameters.
 
+    A GP PREDICTION at arbitrary subgrid settings (fixed training cosmology)
+    — not a measurement read from a simulation catalog. For the baryonic
+    S(k) of analytic/other-suite models use compute_baryon_suppression.
+
     GP emulator (Ramachandra et al. 2026) over 5 subgrid-physics parameters,
     trained on 64 CRK-HACC hydro simulations. Statistics: "Pk" (baryonic
     P(k) ratio), "GSMF" (stellar mass function), "CGD" (cluster gas density),
     "fGas" (gas fraction), "BHMSM" (BH-stellar mass relation), "CSFR" (star
     formation history). Returns the GP mean AND standard deviation — the
-    uncertainty column is real emulator error, propagate it. The x-axis
-    (mass, k, radius, or z depending on the statistic) is the emulator's
-    native grid, written as the first CSV column.
+    uncertainty column is real emulator error, propagate it. The x-axis is
+    the emulator's native grid with REAL values in the first CSV column (Pk:
+    k in h/Mpc, 255 points 0.07-12.5; GSMF/BHMSM: stellar mass; fGas: halo
+    mass; CGD: scaled radius; CSFR: scale factor) — use that column, never
+    reconstruct the grid by hand. metadata.x_axis names it.
     """
     from subgrid_emu.emulator import SubgridEmulator
-    from subgrid_emu.model_metadata import TRAINING_GRIDS
 
     emu = get_cached(f"subgrid:{statistic}:{z_index}",
                      lambda: SubgridEmulator(statistic, z_index=z_index))
@@ -257,17 +293,7 @@ def emulate_subgrid_statistic(
         mean, std = emu.predict(params)
     mean, std = np.ravel(mean), np.ravel(std)
 
-    grid_info = TRAINING_GRIDS.get(statistic, {})
-    x = None
-    for key in ("x", "x_grid", "grid", "bins"):
-        if isinstance(grid_info, dict) and key in grid_info:
-            x = np.ravel(np.asarray(grid_info[key], dtype=float))
-            break
-    if x is None or len(x) != len(mean):
-        x = np.arange(len(mean), dtype=float)
-        x_name = "grid_index"
-    else:
-        x_name = str(grid_info.get("x_name", "x"))
+    x, x_name, x_units = _subgrid_x_axis(statistic, z_index, len(mean))
 
     label = (f"subgrid {statistic} [kappa_w={kappa_w}, e_w={e_w}, "
              f"M_seed={M_seed}, v_kin={v_kin}, e_kin={e_kin}]")
@@ -278,13 +304,14 @@ def emulate_subgrid_statistic(
     columns = {x_name: x, "mean": mean, "gp_std": std}
     write_csv(path, columns,
               [f"label: {label}", f"quantity: subgrid_{statistic}",
-               f"units: {x_name}, statistic-native",
+               f"units: {x_name} [{x_units}], {statistic} [emulator-native]",
                f"statistic: {statistic}", f"z_index: {z_index}",
                f"params: kappa_w={kappa_w},e_w={e_w},M_seed={M_seed},"
                f"v_kin={v_kin},e_kin={e_kin}"])
     metadata = {"statistic": statistic, "z_index": z_index,
                 "params": {"kappa_w": kappa_w, "e_w": e_w, "M_seed": M_seed,
                            "v_kin": v_kin, "e_kin": e_kin},
+                "x_axis": {"column": x_name, "units": x_units},
                 "note": "gp_std column is the emulator 1-sigma uncertainty",
                 "stats": summary_stats(x, mean, x_name, "mean")}
     if return_data:

@@ -149,64 +149,17 @@ def k_grid(k_min: float, k_max: float, n_points: int) -> np.ndarray:
     return np.logspace(np.log10(k_min), np.log10(k_max), n_points)
 
 
-def plot_curves(
-    curve_files: list[str],
-    output_path: Path,
-    *,
-    title: str,
-    ylabel: str,
-    xlabel: str = r"$k\ [h/\mathrm{Mpc}]$",
-    logy: bool = True,
-    ratio_reference: int | None = None,
-    x_column: int = 0,
-    y_column: int = 1,
-) -> list[str]:
-    """Draw curves from CSVs (with optional ratio panel). Returns curve labels."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def unity_crossings(x: np.ndarray, y: np.ndarray, max_points: int = 6) -> list[float]:
+    """x-values where a dimensionless ratio crosses 1 (linear interpolation).
 
-    curves = []
-    for path_str in curve_files:
-        header, cols = read_csv(path_str)
-        names = list(cols.keys())
-        curves.append({
-            "label": header.get("label", Path(path_str).stem),
-            "x": cols[names[x_column]],
-            "y": cols[names[y_column]],
-        })
-
-    if ratio_reference is not None:
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(8, 8), sharex=True,
-            gridspec_kw={"height_ratios": [2, 1], "hspace": 0.06})
-    else:
-        fig, ax1 = plt.subplots(figsize=(8, 5.5))
-        ax2 = None
-
-    linestyles = ["-", "--", "-.", ":"]
-    for i, c in enumerate(curves):
-        plot = ax1.loglog if logy else ax1.semilogx
-        plot(c["x"], c["y"], linestyles[i % len(linestyles)],
-             color=f"C{i}", linewidth=1.8, label=c["label"])
-    ax1.set_ylabel(ylabel)
-    ax1.set_title(title)
-    ax1.legend(fontsize="small")
-
-    if ax2 is not None:
-        ref = curves[ratio_reference]
-        for i, c in enumerate(curves):
-            if i == ratio_reference:
-                continue
-            ratio = c["y"] / np.interp(c["x"], ref["x"], ref["y"])
-            ax2.semilogx(c["x"], ratio, linestyles[i % len(linestyles)],
-                         color=f"C{i}", linewidth=1.8)
-        ax2.axhline(1.0, color="black", linewidth=1)
-        ax2.set_ylabel(f"ratio to {ref['label']}")
-        ax2.set_xlabel(xlabel)
-    else:
-        ax1.set_xlabel(xlabel)
-
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return [c["label"] for c in curves]
+    For B(k), S(k) and composed B*S products these are the scales where the
+    effects cancel / switch sign — quoted directly so nobody has to load the
+    CSV just to find them.
+    """
+    x = np.asarray(x, dtype=float).ravel()
+    d = np.asarray(y, dtype=float).ravel() - 1.0
+    ok = np.isfinite(d)
+    x, d = x[ok], d[ok]
+    idx = np.where(np.sign(d[:-1]) * np.sign(d[1:]) < 0)[0]
+    out = [float(x[i] - d[i] * (x[i + 1] - x[i]) / (d[i + 1] - d[i])) for i in idx]
+    return [round(v, 5) for v in out[:max_points]]

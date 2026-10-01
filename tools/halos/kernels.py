@@ -69,7 +69,8 @@ def compute_hmf(backend: str, mass_def: str, cosmo: dict, masses,
                 z: float, random_seed: int = 0) -> dict:
     """dn/dlnM for one backend — the dispatchable core of the compute_hmf tool.
 
-    Returns {"dn_dlnM": [...], "emulator_std": [...]} (std is zeros for the
+    Returns {"dn_dlnM": [...], "emulator_std": [...]} — emulator_std is the
+    Mira-Titan RELATIVE error sigma/(dn/dlnM) (zeros for the
     analytic fits). ``cosmo`` uses the tool's physical-density convention:
     {Ommh2, Ombh2, Omnuh2, n_s, h, sigma_8, w_0, w_a}.
     """

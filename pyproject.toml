@@ -32,6 +32,7 @@ tool_modules = [
     "tools.baryons",
     "tools.halos",
     "tools.igm",
+    "tools.analysis",
     "mcp_server.dispatch",
 ]
 

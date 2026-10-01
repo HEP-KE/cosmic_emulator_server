@@ -1,6 +1,6 @@
 ---
 name: pk-crosscheck
-description: Cross-validate the nonlinear matter power spectrum across all six P(k) backends at one cosmology and quantify the inter-emulator spread — the honest error bar on any emulated P(k)
+description: Cross-validate the nonlinear matter power spectrum across all seven P(k) emulator backends (bacco, EuclidEmulator2, CSST, GokuNEmu, Mira-Titan, HMcode, syren) at one cosmology and quantify the inter-emulator spread — the honest error bar on any emulated P(k)
 ---
 
 # Nonlinear P(k) cross-check recipe
@@ -13,15 +13,19 @@ same cosmology and reporting the spread.
    backend's box with `describe_emulator` (keys: `baccoemu`, `euclidemu2`,
    `csst`, `gokunemu`, `cosmicemu_mt4`, `camb`, `syren`) — for non-vanilla cosmologies some
    backends will be out of range; run the subset that is valid and say so.
-2. Call `compute_nonlinear_pk` once per backend, same parameters and k-grid
-   (suggest `k_min=0.01`, `k_max=4.5`, `n_points=200`): `baccoemu`,
-   `euclidemu2`, `csst`, `gokunemu`, `miratitan`, `camb_hmcode`,
-   `syren_halofit`. miratitan (Mira-Titan IV / CosmicEmu, HACC) has the
+2. One call: `scan_emulator_parameters(tool="compute_nonlinear_pk",
+   scan={"backend": ["baccoemu", "euclidemu2", "csst", "gokunemu",
+   "miratitan", "camb_hmcode", "syren_halofit"]}, fixed_args={cosmology,
+   "k_min": 0.01, "k_max": 4.5, "n_points": 200}, plot=False)` — the same
+   cosmology and k-grid for every backend (k_max 4.5 keeps baccoemu, which
+   stops at 4.9, in range). miratitan (Mira-Titan IV / CosmicEmu, HACC) has the
    narrowest box (sigma8 0.7-0.9, z <= 2) — drop it when out of range and
    say so.
-3. Plot all files with `plot_pk_comparison`, `reference_index` pointing at
-   `baccoemu` (or the user's preferred reference).
-4. Read the per-backend metadata (never the CSVs themselves) and report:
+3. Plot the scan's files with `plot_emulator_curves`, `reference_index`
+   pointing at `baccoemu` (or the user's preferred reference), short
+   `labels`; the ratio panel is on automatically for P(k).
+4. Read the per-run entries in the scan metadata (never the CSVs
+   themselves) — check `in_training_box` for each — and report:
    - max |ratio - 1| per backend vs the reference, and at which k
    - the k-range where all backends agree within 2%
    - which backend to use for the stated purpose (speed -> syren; wide

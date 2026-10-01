@@ -19,7 +19,7 @@ Total runtime is under a minute; every step returns a CSV or PNG artifact.
 ## The tour (run in this order)
 
 1. **Matter power** — `compute_nonlinear_pk` twice at the same cosmology
-   with `backend="baccoemu"` and `backend="csst"`, then `plot_pk_comparison`
+   with `backend="baccoemu"` and `backend="csst"`, then `plot_emulator_curves`
    with both files. Point out the ratio panel: two independent simulation
    suites agreeing at the percent level.
 2. **Modified gravity** — `compute_mg_boost` with `model="cubic_galileon"`,
@@ -27,7 +27,7 @@ Total runtime is under a minute; every step returns a CSV or PNG artifact.
    uncertainty. Then `compute_mg_pk` with `model="fofr"` to show boost x
    baseline composition (metadata records the baseline used).
 3. **CMB** — `compute_cmb_cls` with `backend="capse"` and again with
-   `backend="cosmopower_jax"`, then `plot_cmb_spectra` with both. Two
+   `backend="cosmopower_jax"`, then `plot_emulator_curves` with both. Two
    different neural emulators, two different native conventions, one Dl
    [muK^2] output — they overlay to sub-percent.
 4. **Galaxy clustering** — `compute_linear_pk` (`backend="camb"`,
@@ -36,9 +36,9 @@ Total runtime is under a minute; every step returns a CSV or PNG artifact.
    linear spectrum.
 5. **Weak lensing** — `compute_lensing_cls` with defaults.
 6. **Baryons** — `compute_baryon_suppression` with `model="spk"` and
-   `model="syren_IllustrisTNG"`, plot both with `plot_pk_comparison`.
+   `model="syren_IllustrisTNG"`, plot both with `plot_emulator_curves`.
    Mention the inter-suite spread as a real systematic.
-7. **Halos** — `compute_hmf` with defaults; note the emulator_std column.
+7. **Halos** — `compute_hmf` with defaults; note the emulator_rel_std column (fractional 1-sigma error).
 8. **Lyman-alpha** — `emulate_lya_p1d` with defaults; flag the unit switch
    (comoving Mpc, no h — deliberate, matches DESI convention).
 
@@ -46,8 +46,9 @@ Total runtime is under a minute; every step returns a CSV or PNG artifact.
 
 End with a compact summary table: family | tool used | headline number
 (e.g. "nonlinear P(k), two suites agree to 2%"). Mention the deeper
-skills available via `load_skill`: pk-crosscheck, mg-explore,
-baryon-budget.
+skills available via `load_emulator_skill`: pk-crosscheck, mg-explore,
+baryon-budget, mg-baryon-degeneracy, lensing-fisher-inputs. For any sweep
+over a parameter, `scan_emulator_parameters` replaces repeated calls.
 
 ## Cautions
 

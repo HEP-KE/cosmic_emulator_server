@@ -21,7 +21,7 @@ from ..common import (ArtifactResult, T_CMB_UK, downsample_columns,
 _CMB_DEFAULTS = {"omega_b": 0.022, "omega_cdm": 0.12, "h": 0.67,
                  "tau": 0.055, "ns": 0.965, "ln10As": 3.045}
 
-__all__ = ["compute_cmb_cls", "plot_cmb_spectra"]
+__all__ = ["compute_cmb_cls"]
 
 Spectrum = Literal["TT", "TE", "EE", "PP"]
 Backend = Literal["capse", "cosmopower_jax"]
@@ -85,6 +85,7 @@ def compute_cmb_cls(
     evaluations trained on Planck-neighborhood parameter boxes — stay within
     the field ranges above. For PP (lensing potential) the output is the raw
     Capse convention, recorded in metadata. Output CSV: ell, Dl_muK2.
+    Plot with plot_emulator_curves (D_l gets linear axes automatically).
     """
     params = {"omega_b": omega_b, "omega_cdm": omega_cdm, "h": h,
               "tau": tau, "ns": ns, "ln10As": ln10As}
@@ -112,42 +113,4 @@ def compute_cmb_cls(
         status="success", files=[str(path)],
         message=f"Computed {spectrum} D_l with {backend} for l = 2..{int(ell[-1])}.",
         metadata=metadata,
-    )
-
-
-@validate_call
-def plot_cmb_spectra(
-    spectrum_files: Annotated[list[str], Field(min_length=1, max_length=6)],
-    output_dir: Annotated[str, Field(min_length=1)],
-    logx: bool = False,
-) -> ArtifactResult:
-    """Plot CMB Dl spectra from CSVs written by compute_cmb_cls."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from ..common import read_csv
-
-    fig, ax = plt.subplots(figsize=(8, 5.5))
-    labels = []
-    for i, path_str in enumerate(spectrum_files):
-        header, cols = read_csv(path_str)
-        label = header.get("label", f"curve {i}")
-        ax.plot(cols["ell"], cols["Dl_muK2"], color=f"C{i}", linewidth=1.6,
-                label=label)
-        labels.append(label)
-    if logx:
-        ax.set_xscale("log")
-    ax.set_xlabel(r"$\ell$")
-    ax.set_ylabel(r"$D_\ell\ [\mu K^2]$")
-    ax.set_title("CMB angular power spectra")
-    ax.legend(fontsize="small")
-    outdir = resolve_outdir(output_dir)
-    path = outdir / f"cmb_spectra_{param_slug({'f': tuple(spectrum_files)})}.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return ArtifactResult(
-        status="success", files=[str(path)],
-        message=f"Plotted {len(labels)} CMB spectra.",
-        metadata={"labels": labels},
     )

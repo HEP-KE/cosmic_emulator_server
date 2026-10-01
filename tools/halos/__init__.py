@@ -64,10 +64,14 @@ def compute_hmf(
     random_seed: Annotated[int, Field(ge=0, description="Seed for the emulator's Monte-Carlo error draws — fixed by default so identical calls are bitwise reproducible.")] = 0,
     return_data: Annotated[bool, Field(description="Include downsampled arrays in metadata.data.")] = False,
 ) -> ArtifactResult:
-    """Compute the halo mass function dn/dlnM — emulator or linear-theory fits.
+    """Predict the halo mass function dn/dlnM from an emulator or analytic fit.
+
+    A THEORY prediction at a given cosmology — not a measurement from a
+    simulation halo catalog (query a simulation-data server for that).
 
     Backends: "miratitan" (simulation-calibrated GP emulator, M200c,
-    <2% for 1e13-1e14 Msun/h at z<1, ~10% at 1e15, includes emulator_std)
+    <2% for 1e13-1e14 Msun/h at z<1, ~10% at 1e15; the emulator_rel_std
+    column is its RELATIVE 1-sigma error, i.e. sigma(dn/dlnM)/(dn/dlnM))
     and three theory baselines via colossus: "tinker08" (SO-calibrated fit
     — the right one to overlay against miratitan, at mass_def='200c'),
     "sheth_tormen" and "press_schechter" (FoF multiplicity functions,
@@ -76,7 +80,7 @@ def compute_hmf(
     All backends share the same cosmology arguments (Ommh2/Ombh2 are
     PHYSICAL densities) and the same output convention: M [Msun/h],
     dn/dlnM comoving [(Mpc/h)^-3] — files overlay directly in
-    plot_pk_comparison. Emulator-vs-theory comparison is a good validation
+    plot_emulator_curves. Emulator-vs-theory comparison is a good validation
     workflow: expect ~5-10% agreement between miratitan and tinker08 at
     200c, and larger, mass-dependent deviations for the older fits.
     """
@@ -108,10 +112,11 @@ def compute_hmf(
 
     if backend == "miratitan":
         base_label = f"Mira-Titan HMF z={z:g}"
-        err_note = "emulator_std is the GP 1-sigma uncertainty"
+        err_note = ("emulator_rel_std is the emulator's RELATIVE 1-sigma error "
+                    "sigma/(dn/dlnM) — multiply by dn_dlnM for an absolute error")
     else:
         base_label = f"{backend} ({mass_def}) HMF z={z:g}"
-        err_note = ("analytic fit - emulator_std column is 0; typical "
+        err_note = ("analytic fit - emulator_rel_std column is 0; typical "
                     "calibration accuracy ~5-10% (tinker08) or worse "
                     "(older fits)")
 
@@ -121,10 +126,10 @@ def compute_hmf(
     path = outdir / f"hmf_{backend}_z{z:g}_{slug}.csv"
     mass_col = f"M{mass_def}_Msun_per_h"
     columns = {mass_col: masses, "dn_dlnM_h3_Mpc3": hmf,
-               "emulator_std": err}
+               "emulator_rel_std": err}
     write_csv(path, columns,
               [f"label: {label}", "quantity: hmf",
-               f"units: M ({mass_def}) [Msun/h], dn/dlnM [(Mpc/h)^-3]",
+               f"units: M ({mass_def}) [Msun/h], dn/dlnM [(Mpc/h)^-3], emulator_rel_std [fractional]",
                f"backend: {backend}", f"mass_def: {mass_def}",
                f"z: {z:g}", f"cosmo: {cosmo}",
                f"random_seed: {random_seed}"])

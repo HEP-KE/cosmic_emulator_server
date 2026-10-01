@@ -38,14 +38,15 @@ or point any MCP client at the HTTP endpoint (`http://host:8000/mcp`).
 
 | Family | Tools | Backends |
 |---|---|---|
-| meta | list_emulators, describe_emulator, convert_cosmology, list_skills, load_skill | registry + cosmology-convention converter + skills |
-| pk | compute_linear_pk, compute_nonlinear_pk, compose_spectra, plot_pk_comparison | camb, syren, baccoemu, euclidemu2, csst, gokunemu |
+| meta | list_emulators, describe_emulator, convert_cosmology, list_emulator_skills, load_emulator_skill | registry + cosmology-convention converter + skills |
+| pk | compute_linear_pk, compute_nonlinear_pk, compose_spectra | camb, syren, baccoemu, euclidemu2, csst, gokunemu |
 | gravity | compute_mg_boost, compute_mg_pk | e-MANTIS f(R), nDGPemu, CubicGalileonEmu |
-| cmb | compute_cmb_cls, plot_cmb_spectra | capse (l<=5000), cosmopower-jax |
+| cmb | compute_cmb_cls | capse (l<=5000), cosmopower-jax |
 | lss | compute_galaxy_multipoles, compute_lensing_cls | PyBird one-loop EFT, jax-cosmo |
 | baryons | compute_baryon_suppression, baryonify_pk, emulate_subgrid_statistic | SP(k), bacco, syren-baryon x4 suites, subgrid_emu |
 | halos | compute_hmf, predict_cluster_gas_params | Mira-Titan HMF, picasso |
 | igm | emulate_lya_p1d | LaCE (DESI) |
+| analysis | plot_emulator_curves, scan_emulator_parameters | publication figures from any output CSVs (mathtext, no LaTeX needed); batched parameter sweeps over any compute tool |
 
 ## Skills (server-side, client-agnostic)
 
@@ -53,8 +54,8 @@ The server carries its own skills — named multi-tool recipes in
 [`skills/`](skills/) (markdown with a small frontmatter header). Any MCP
 client can use them through two routes:
 
-- **Tools**: `list_skills` returns a name + description index;
-  `load_skill` returns the full instructions to follow. Works with every
+- **Tools**: `list_emulator_skills` returns a name + description index;
+  `load_emulator_skill` returns the full instructions to follow. Works with every
   MCP client, including plain agent loops.
 - **MCP prompts**: each skill is also registered as a native prompt, so
   prompt-capable clients surface the same recipes in their UI directly.
@@ -62,9 +63,11 @@ client can use them through two routes:
 | Skill | What it does |
 |---|---|
 | `cosmo-tour` | one representative computation per family; the demo path |
-| `pk-crosscheck` | all six nonlinear P(k) backends at one cosmology; quantifies the inter-emulator spread (the honest error bar) |
+| `pk-crosscheck` | all seven nonlinear P(k) backends at one cosmology; quantifies the inter-emulator spread (the honest error bar) |
 | `mg-explore` | modified-gravity boosts, parameter sweeps, composed P(k) vs the ΛCDM baseline |
 | `baryon-budget` | baryonic-suppression envelope across models + CRK-HACC subgrid predictions with GP uncertainties |
+| `mg-baryon-degeneracy` | MG boost x baryon suppression grids, cancellation scales (B*S = 1) and their spread across feedback models; factorization caveats |
+| `lensing-fisher-inputs` | finite-difference lensing C_ell derivatives, step-size checks, and B/S tables for a coding-task Fisher forecast; what the server cannot compute |
 
 The file format matches common client-side skill loaders (frontmatter
 `name:`/`description:` + markdown body), so the same recipes can also be
